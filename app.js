@@ -10,12 +10,29 @@ app.get("/", (req, res) => {
   res.sendFile(__dirname + "/index.html");
 });
 
+io.on("connection", (socket) => {
+  console.log("A user connected");
+
+  socket.on("client-message", (data) => {
+    sendGlobalMessage(data);
+  });
+});
+
 app.post("/report", (req, res) => {
-  io.emit("err", req.body.msg);
+  const data = { message: req.body.message };
+  sendGlobalMessage(data);
   res.status(200);
-  res.send(null);
+  res.send(data);
 });
 
 http.listen(port, "0.0.0.0", () => {
-  console.log(`Socket.IO server running at http://localhost:${port}/`);
+  console.log(`Server running at http://localhost:${port}/`);
 });
+
+// #region helpers
+
+function sendGlobalMessage(msg) {
+  io.emit("message", msg);
+}
+
+// #endregion
