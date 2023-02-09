@@ -3,6 +3,13 @@ const http = require("http").Server(app);
 const io = require("socket.io")(http);
 const port = process.env.PORT || 3000;
 const bodyParser = require("body-parser");
+const cors = require('cors');
+
+var corsOptions = {
+  origin: ['http://localhost:9000', 'http://192.168.1.125:9922', 'http://192.168.1.110:9000'],
+}
+
+app.use(cors(corsOptions));
 
 app.use(bodyParser.json());
 
@@ -19,7 +26,9 @@ io.on("connection", (socket) => {
 });
 
 app.post("/report", (req, res) => {
-  const data = { message: req.body.message };
+  const body = req.body;
+  console.log('Received post to /report: ', body)
+  const data = { message: body.message };
   sendGlobalMessage(data);
   res.status(200);
   res.send(data);
