@@ -3,11 +3,16 @@ const http = require("http").Server(app);
 const io = require("socket.io")(http);
 const port = process.env.PORT || 3000;
 const bodyParser = require("body-parser");
-const cors = require('cors');
+const cors = require("cors");
 
 var corsOptions = {
-  origin: ['http://localhost:9000', 'http://192.168.1.125:9922', 'http://192.168.1.110:9000'],
-}
+  origin: [
+    "http://localhost:8080",
+    "http://localhost:9000",
+    "http://192.168.1.125:9922",
+    "http://192.168.1.110:9000",
+  ],
+};
 
 app.use(cors(corsOptions));
 
@@ -25,9 +30,27 @@ io.on("connection", (socket) => {
   });
 });
 
+/**
+ * @openapi
+ *
+ * /report:
+ *   post:
+ *     summary: Submits a message
+ *     produces:
+ *       - "application/json"
+ *     parameters:
+ *       - name: data
+ *         in: body
+ *         schema:
+ *           properties:
+ *             message: { type: string }
+ *     responses:
+ *       200:
+ *         description: OK
+ */
 app.post("/report", (req, res) => {
   const body = req.body;
-  console.log('Received post to /report: ', body)
+  console.log("Received post to /report: ", body);
   const data = { message: body.message };
   sendGlobalMessage(data);
   res.status(200);
