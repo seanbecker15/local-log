@@ -16,7 +16,7 @@ The easiest way to report messages to this server is by using the REST endpoint.
 const log = async (msg: string) => {
   // Replace private IP below
   // You can use this command to get your private IP on a mac: `ipconfig getifaddr en0`
-  const url = '<private IP>:3000/report'
+  const url = 'http://<private IP>:3000/report'
   const response = await fetch(url, {
     method: 'POST',
     mode: 'cors',
@@ -33,4 +33,4 @@ const log = async (msg: string) => {
 }
 ```
 
-If you have any trouble you can run `npm run swagger` to test out the API via Swagger UI.
+If you have any trouble you can run `npm run swagger` to test out the API via Swagger UI. Swagger is hosted at [localhost:8080](http://localhost:8080) by default.
