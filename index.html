@@ -73,16 +73,10 @@
       socket.on("message", function (json) {
         const { message } = json;
 
-        console.log(message)
-
-        const lines = message.split('\n')
-
-        console.log(lines)
-
-        lines.forEach(line => {
-          var newMessageEl = document.createElement("li");
-          newMessageEl.textContent = line;
-          messagesEl.appendChild(newMessageEl);
+        message.split('\n').forEach(msgLine => {
+          var msgElement = document.createElement("li");
+          msgElement.textContent = msgLine;
+          messagesEl.appendChild(msgElement);
         })
 
         window.scrollTo(0, document.body.scrollHeight);
