@@ -7,6 +7,7 @@ const cors = require("cors");
 
 var corsOptions = {
   origin: [
+    "http://localhost:3000",
     "http://localhost:8080",
     "http://localhost:9000",
     "http://192.168.1.125:9922",
@@ -23,7 +24,7 @@ app.get("/", (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  console.log("A user connected");
+  console.log("user connected via socket");
 
   socket.on("client-message", (data) => {
     sendGlobalMessage(data);

@@ -64,6 +64,27 @@
     </form>
 
     <script src="/socket.io/socket.io.js"></script>
+    <!-- dog food -->
+    <script>
+      const log = async (msg) => {
+        const url = 'http://192.168.1.109:3000/report'
+        const response = await fetch(url, {
+          method: 'POST',
+          mode: 'cors',
+          cache: 'no-cache',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          redirect: 'follow',
+          referrerPolicy: 'no-referrer',
+          body: JSON.stringify({ message: msg }),
+        })
+        return response.json()
+      }
+      
+      log('client connected via REST api')
+    </script>
 
     <script>
       var socket = io();
