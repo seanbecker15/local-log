@@ -49,4 +49,4 @@ window.console.warn = log
 window.console.error = log
 ```
 
-If you have any trouble you can run `npm run swagger` to view the API via Swagger UI. Swagger is hosted at [localhost:8080](http://localhost:8080) by default.
+For API documentation, run `npm run swagger`. Swagger is hosted at [localhost:8080](http://localhost:8080) by default.
