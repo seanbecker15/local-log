@@ -13,10 +13,20 @@ This project consists of a server that accepts post requests and socket events f
 The easiest way to report messages to this server is by using the REST endpoint. Paste the code below (make sure to replace the private IP) and open [localhost:3000](http://localhost:3000).
 
 ```javascript
-const log = async (msg: string) => {
-  // Replace private IP below
+// Sends logs to server using console.log params
+const log = async (...messages: string[]) => {
+  let content = ''
+  if (messages?.length && messages.length > 1) {
+    content = JSON.stringify(messages)
+  } else {
+    content = messages[0]
+  }
+  
   // You can use this command to get your private IP on a mac: `ipconfig getifaddr en0`
+  // <<<< REPLACE >>>>
   const url = 'http://<private IP>:3000/report'
+  // <<<< REPLACE >>>>
+
   const response = await fetch(url, {
     method: 'POST',
     mode: 'cors',
@@ -27,10 +37,16 @@ const log = async (msg: string) => {
     },
     redirect: 'follow',
     referrerPolicy: 'no-referrer',
-    body: JSON.stringify({ message: msg }),
+    body: JSON.stringify({ message: content }),
   })
   return response.json()
 }
+
+// In a browser, redirect the console to the function above
+window.console.info = log
+window.console.log = log
+window.console.warn = log
+window.console.error = log
 ```
 
 If you have any trouble you can run `npm run swagger` to test out the API via Swagger UI. Swagger is hosted at [localhost:8080](http://localhost:8080) by default.
