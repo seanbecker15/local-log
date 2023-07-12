@@ -1,4 +1,4 @@
-# Message Service
+# Local Log
 
 ## Overview
 This project consists of a server that accepts post requests and socket events for logging purposes. Logs are emitted to the UI which is served at the root path (localhost:3000).
