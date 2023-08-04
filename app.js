@@ -36,7 +36,7 @@ io.on("connection", (socket) => {
 /**
  * @openapi
  *
- * /report:
+ * /message:
  *   post:
  *     summary: Submits a message
  *     produces:
@@ -50,44 +50,68 @@ io.on("connection", (socket) => {
  *     responses:
  *       200:
  *         description: OK
+ *       400:
+ *         description: FAIL
  */
-app.post("/report", (req, res) => {
-  const body = req.body;
+app.post("/message", (req, res) => {
+  try {
+    const body = req.body;
+    const { message } = body
 
-  console.log("Received post to /report");
-
-  const data = { message: body.message };
-
-  sendGlobalMessage(data);
-
-  res.status(200);
-  res.send(data);
+    sendGlobalMessage({ message });
+    console.log(`${new Date().getTime()} [POST] /message - status (200)`);
+    res.status(200);
+    res.send({ message: 'message processed', content: message });
+  } catch {
+    console.log(`${new Date().getTime()} [POST] /message - status (400)`);
+    res.status(400)
+    res.send({ message: 'message not processed' });
+  }
 });
 
+/**
+ * @openapi
+ *
+ * /log:
+ *   post:
+ *     summary: Logs a message
+ *     produces:
+ *       - "application/json"
+ *     parameters:
+ *       - name: data
+ *         in: body
+ *         schema:
+ *           properties:
+ *             message: { type: string }
+ *     responses:
+ *       200:
+ *         description: OK
+ *       400:
+ *         description: FAIL
+ */
 app.post("/log", (req, res) => {
   try {
     const body = req.body;
     const { logs, session } = body;
-    let updates = logs.reduce((acc, log) => {
+    const lines = logs.reduce((acc, log) => {
       const parsedLog = JSON.parse(log);
       const { type: level, item } = parsedLog;
-      const json = {
+      const row = JSON.stringify({
         level,
         message: JSON.stringify(item),
         identity: session.join(", "),
-      };
-      return `${acc}${JSON.stringify(json)}\n`;
+      });
+      return `${acc}${row}\n`;
     }, "");
-
-    updateLogFile(updates);
-    sendGlobalMessage({ message: updates });
+    updateLogFile(lines);
+    sendGlobalMessage({ message: lines });
     console.log(`${new Date().getTime()} [POST] /log - status (200)`);
     res.status(200);
-    res.send({ message: 'log processed' });
+    res.send({ message: "log processed" });
   } catch {
     console.error(`${new Date().getTime()} [POST] /log - status (400)`);
     res.status(400);
-    res.send({ message: 'log not processed' });
+    res.send({ message: "log not processed" });
   }
 });
 

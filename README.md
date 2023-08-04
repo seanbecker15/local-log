@@ -24,7 +24,7 @@ const log = async (...messages: string[]) => {
   
   // You can use this command to get your private IP on a mac: `ipconfig getifaddr en0`
   // <<<< REPLACE >>>>
-  const url = 'http://<private IP>:3000/report'
+  const url = 'http://<private IP>:3000/message'
   // <<<< REPLACE >>>>
 
   const response = await fetch(url, {
