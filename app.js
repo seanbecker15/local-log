@@ -4,6 +4,8 @@ const io = require("socket.io")(http);
 const port = process.env.PORT || 3000;
 const bodyParser = require("body-parser");
 const cors = require("cors");
+const { appendFileSync } = require("fs");
+const path = require("path");
 
 var corsOptions = {
   origin: [
@@ -51,11 +53,42 @@ io.on("connection", (socket) => {
  */
 app.post("/report", (req, res) => {
   const body = req.body;
-  console.log("Received post to /report: ", body);
+
+  console.log("Received post to /report");
+
   const data = { message: body.message };
+
   sendGlobalMessage(data);
+
   res.status(200);
   res.send(data);
+});
+
+app.post("/log", (req, res) => {
+  try {
+    const body = req.body;
+    const { logs, session } = body;
+    let updates = logs.reduce((acc, log) => {
+      const parsedLog = JSON.parse(log);
+      const { type: level, item } = parsedLog;
+      const json = {
+        level,
+        message: JSON.stringify(item),
+        identity: session.join(", "),
+      };
+      return `${acc}${JSON.stringify(json)}\n`;
+    }, "");
+
+    updateLogFile(updates);
+    sendGlobalMessage({ message: updates });
+    console.log(`${new Date().getTime()} [POST] /log - status (200)`);
+    res.status(200);
+    res.send({ message: 'log processed' });
+  } catch {
+    console.error(`${new Date().getTime()} [POST] /log - status (400)`);
+    res.status(400);
+    res.send({ message: 'log not processed' });
+  }
 });
 
 http.listen(port, "0.0.0.0", () => {
@@ -66,6 +99,11 @@ http.listen(port, "0.0.0.0", () => {
 
 function sendGlobalMessage(msg) {
   io.emit("message", msg);
+}
+
+function updateLogFile(text) {
+  const filepath = path.resolve(__dirname, "out.log");
+  appendFileSync(filepath, text);
 }
 
 // #endregion
