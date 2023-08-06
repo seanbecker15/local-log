@@ -1,7 +1,7 @@
-const express = require('express');
-const http = require('http');
+const express = require("express");
+const http = require("http");
 const bodyParser = require("body-parser");
-const socketio = require('socket.io');
+const socketio = require("socket.io");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
@@ -10,7 +10,7 @@ const app = express();
 const server = http.Server(app);
 const io = socketio(server);
 
-const { appendFileSync } = fs
+const { appendFileSync, readFileSync, writeFileSync } = fs;
 
 const PORT = process.env.PORT || 3000;
 const CORS_OPTIONS = {
@@ -23,17 +23,34 @@ const CORS_OPTIONS = {
   ],
 };
 
-app.use('/public', express.static(path.join(__dirname, './public')));
+app.use("/public", express.static(path.join(__dirname, "./public")));
 
 app.use(cors(CORS_OPTIONS));
 
 app.use(bodyParser.json());
+
+let messages = [];
+
+try {
+  messages = JSON.parse(readMessagesFile());
+} catch {
+  console.warn("Unable to read messages file at startup", e);
+}
+
+setTimeout(() => {
+  writeMessagesFile(JSON.stringify(messages));
+}, 30000);
 
 io.on("connection", (socket) => {
   console.log("user connected via socket");
 
   socket.on("client-message", (data) => {
     sendGlobalMessage(data);
+    messages.push(data);
+  });
+
+  messages.forEach((message) => {
+    socket.emit("message", message);
   });
 });
 
@@ -76,15 +93,16 @@ app.get("/", (req, res) => {
 app.post("/message", (req, res) => {
   try {
     const body = req.body;
-    const { message } = body
+    const { message } = body;
     sendGlobalMessage({ message });
+    messages.push(message);
     console.log(`${new Date().getTime()} [POST] /message - status (200)`);
     res.status(200);
-    res.send({ message: 'message processed', content: message });
+    res.send({ message: "message processed", content: message });
   } catch {
     console.log(`${new Date().getTime()} [POST] /message - status (400)`);
-    res.status(400)
-    res.send({ message: 'message not processed' });
+    res.status(400);
+    res.send({ message: "message not processed" });
   }
 });
 
@@ -142,17 +160,21 @@ server.listen(PORT, "0.0.0.0", () => {
 
 function sendGlobalMessage(message) {
   io.emit("message", message);
-  updateMessageFile(`${JSON.stringify(message)}\n`);
 }
 
 function updateLogFile(text) {
   const filepath = path.resolve(__dirname, "out.log");
-  appendFileSync(filepath, text);
+  return appendFileSync(filepath, text);
 }
 
-function updateMessageFile(text) {
-  const filepath = path.resolve(__dirname, "message.log");
-  appendFileSync(filepath, text);
+function writeMessagesFile(text) {
+  const filepath = path.resolve(__dirname, "messages.json");
+  writeFileSync(filepath, text, { encoding: "utf-8" });
+}
+
+function readMessagesFile() {
+  const filepath = path.resolve(__dirname, "messages.json");
+  return readFileSync(filepath, { encoding: "utf-8" });
 }
 
 // #endregion

@@ -4,6 +4,10 @@ const form = document.getElementById("form");
 const messageList = document.getElementById("message-list");
 
 socket.on("message", function ({ message }) {
+  if (typeof message !== "string") {
+    return;
+  }
+
   message.split("\n").forEach((text) => {
     const messagesItem = document.createElement("li");
     messagesItem.textContent = `[${new Date().toISOString()}] ${text}`;
@@ -16,9 +20,13 @@ socket.on("message", function ({ message }) {
 
 form.addEventListener("submit", (event) => {
   event.preventDefault();
-  socket.emit("client-message", {
-    message: new FormData(form).get("message"),
-  });
+
+  const message = new FormData(form).get("message");
+  if (message) {
+    socket.emit("client-message", {
+      message: new FormData(form).get("message"),
+    });
+  }
 });
 
 messageList.style.maxHeight = window.innerHeight - form.clientHeight;
