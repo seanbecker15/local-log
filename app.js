@@ -29,16 +29,28 @@ app.use(cors(CORS_OPTIONS));
 
 app.use(bodyParser.json());
 
-app.get("/", (req, res) => {
-  res.sendFile(__dirname + "/public/index.html");
-});
-
 io.on("connection", (socket) => {
   console.log("user connected via socket");
 
   socket.on("client-message", (data) => {
     sendGlobalMessage(data);
   });
+});
+
+/**
+ * @openapi
+ *
+ * /:
+ *   get:
+ *     summary: Gets message UI
+ *     produces:
+ *       - "text/html"
+ *     responses:
+ *       200:
+ *         description: OK
+ */
+app.get("/", (req, res) => {
+  res.sendFile(__dirname + "/public/index.html");
 });
 
 /**
@@ -65,7 +77,6 @@ app.post("/message", (req, res) => {
   try {
     const body = req.body;
     const { message } = body
-
     sendGlobalMessage({ message });
     console.log(`${new Date().getTime()} [POST] /message - status (200)`);
     res.status(200);
@@ -129,12 +140,18 @@ server.listen(PORT, "0.0.0.0", () => {
 
 // #region helpers
 
-function sendGlobalMessage(msg) {
-  io.emit("message", msg);
+function sendGlobalMessage(message) {
+  io.emit("message", message);
+  updateMessageFile(`${JSON.stringify(message)}\n`);
 }
 
 function updateLogFile(text) {
   const filepath = path.resolve(__dirname, "out.log");
+  appendFileSync(filepath, text);
+}
+
+function updateMessageFile(text) {
+  const filepath = path.resolve(__dirname, "message.log");
   appendFileSync(filepath, text);
 }
 
