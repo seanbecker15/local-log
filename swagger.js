@@ -1,9 +1,9 @@
-var app = require('express')();
-var http = require('http');
+const app = require("express")();
+const http = require("http"); 
 const swaggerJSDoc = require("swagger-jsdoc");
 const swaggerTools = require("swagger-tools");
 
-const fs = require('fs')
+const fs = require("fs");
 
 const swaggerPort = process.env.PORT || 8080;
 const messagePort = 3000;
@@ -23,19 +23,18 @@ const swaggerOptions = {
 
 const swaggerSpec = swaggerJSDoc(swaggerOptions);
 
-fs.writeFileSync('./api-docs.json', JSON.stringify(swaggerSpec))
+fs.writeFileSync("./api-docs.json", JSON.stringify(swaggerSpec));
 
 swaggerTools.initializeMiddleware(swaggerSpec, function (middleware) {
-
   // Serve the Swagger documents and Swagger UI
-  app.use(middleware.swaggerUi({ swaggerUi: '/' }));
+  app.use(middleware.swaggerUi({ swaggerUi: "/" }));
 
   // Start the server
   http.createServer(app).listen(swaggerPort, function () {
     console.log(
       "Your server is listening on port %d (http://localhost:%d)",
       swaggerPort,
-      swaggerPort
+      swaggerPort,
     );
   });
 });

@@ -1,0 +1,6 @@
+# Swagger output
+api-docs.json
+
+# Runtime output
+out.log
+messages.json
