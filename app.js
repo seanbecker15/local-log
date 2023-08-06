@@ -1,13 +1,19 @@
-const app = require("express")();
-const http = require("http").Server(app);
-const io = require("socket.io")(http);
-const port = process.env.PORT || 3000;
+const express = require('express');
+const http = require('http');
 const bodyParser = require("body-parser");
+const socketio = require('socket.io');
 const cors = require("cors");
-const { appendFileSync } = require("fs");
+const fs = require("fs");
 const path = require("path");
 
-var corsOptions = {
+const app = express();
+const server = http.Server(app);
+const io = socketio(server);
+
+const { appendFileSync } = fs
+
+const PORT = process.env.PORT || 3000;
+const CORS_OPTIONS = {
   origin: [
     "http://localhost:3000",
     "http://localhost:8080",
@@ -17,12 +23,14 @@ var corsOptions = {
   ],
 };
 
-app.use(cors(corsOptions));
+app.use('/public', express.static(path.join(__dirname, './public')));
+
+app.use(cors(CORS_OPTIONS));
 
 app.use(bodyParser.json());
 
 app.get("/", (req, res) => {
-  res.sendFile(__dirname + "/index.html");
+  res.sendFile(__dirname + "/public/index.html");
 });
 
 io.on("connection", (socket) => {
@@ -115,8 +123,8 @@ app.post("/log", (req, res) => {
   }
 });
 
-http.listen(port, "0.0.0.0", () => {
-  console.log(`Server running at http://localhost:${port}/`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running at http://localhost:${PORT}/`);
 });
 
 // #region helpers
