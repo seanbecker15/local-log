@@ -1,5 +1,5 @@
 const express = require("express");
-const http = require("http");
+const { Server } = require("http");
 const bodyParser = require("body-parser");
 const socketio = require("socket.io");
 const cors = require("cors");
@@ -7,7 +7,7 @@ const fs = require("fs");
 const path = require("path");
 
 const app = express();
-const server = http.Server(app);
+const server = new Server(app);
 const io = socketio(server);
 
 const { appendFileSync, readFileSync, writeFileSync } = fs;
@@ -156,25 +156,36 @@ server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running at http://localhost:${PORT}/`);
 });
 
-// #region helpers
-
-function sendGlobalMessage(message) {
-  io.emit("message", message);
+/**
+ * Emits a message to all connected clients using Socket.io.
+ *
+ * @param {{message: string}} messageObj the message object we send to all connected clients.
+ */
+function sendGlobalMessage(messageObj) {
+  io.emit("message", messageObj);
 }
 
+/**
+ *
+ * @param {string} text string content to append to the out.log file.
+ */
 function updateLogFile(text) {
   const filepath = path.resolve(__dirname, "out.log");
-  return appendFileSync(filepath, text);
+  appendFileSync(filepath, text);
 }
 
+/**
+ * @param {string} text string content to store in the messages.json file.
+ */
 function writeMessagesFile(text) {
   const filepath = path.resolve(__dirname, "messages.json");
   writeFileSync(filepath, text, { encoding: "utf-8" });
 }
 
+/**
+ * @return {string} string content of the messages.json file.
+ */
 function readMessagesFile() {
   const filepath = path.resolve(__dirname, "messages.json");
   return readFileSync(filepath, { encoding: "utf-8" });
 }
-
-// #endregion
