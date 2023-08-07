@@ -34,7 +34,7 @@ let messages = [];
 try {
   messages = JSON.parse(readMessagesFile());
 } catch {
-  console.warn("Unable to read messages file at startup", e);
+  console.warn("Unable to read messages file at startup");
 }
 
 setTimeout(() => {
