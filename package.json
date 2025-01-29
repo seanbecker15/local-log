@@ -15,7 +15,7 @@
     "body-parser": "^1.20.3",
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "socket.io": "^4.7.5",
+    "socket.io": "^4.8.1",
     "swagger-jsdoc": "^6.2.8",
     "swagger-tools": "^0.10.4"
   },
