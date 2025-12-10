@@ -5,8 +5,6 @@ const socketio = require("socket.io");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
-const swaggerJSDoc = require("swagger-jsdoc");
-const swaggerUi = require('swagger-ui-express');
 
 const app = express();
 const server = new Server(app);
@@ -16,32 +14,38 @@ const { appendFileSync, readFileSync, writeFileSync } = fs;
 
 const PORT = process.env.PORT || 3000;
 const CORS_OPTIONS = {
-  origin: [
-    "http://localhost:3000",
-    "http://localhost:8080",
-    "http://localhost:9000",
-    "http://192.168.1.125:9922",
-    "http://192.168.1.110:9000",
-  ],
+  origin: ["https://example.com"],
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 };
 
 app.use("/public", express.static(path.join(__dirname, "./public")));
 
-const swaggerOptions = {
-  swaggerDefinition: {
-    info: {
-      title: "OP Logger",
-      version: "1.0.0",
-      description: "Alows on-prem (local) logging via REST and Socket Events",
-    },
-    host: `localhost:${PORT}`,
-    basePath: "/",
-  },
-  apis: ["./app.js"],
-};
-const swaggerSpec = swaggerJSDoc(swaggerOptions);
+if (process.env.NODE_ENV !== "production") {
+  app.use((_, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "*");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    next();
+  });
 
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  const swaggerJSDoc = require("swagger-jsdoc");
+  const swaggerUi = require("swagger-ui-express");
+  const swaggerOptions = {
+    swaggerDefinition: {
+      info: {
+        title: "OP Logger",
+        version: "1.0.0",
+        description: "Alows on-prem (local) logging via REST and Socket Events",
+      },
+      host: `localhost:${PORT}`,
+      basePath: "/",
+    },
+    apis: ["./app.js"],
+  };
+  const swaggerSpec = swaggerJSDoc(swaggerOptions);
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 app.use(cors(CORS_OPTIONS));
 
