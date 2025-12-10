@@ -5,6 +5,8 @@ const socketio = require("socket.io");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
+const swaggerJSDoc = require("swagger-jsdoc");
+const swaggerUi = require('swagger-ui-express');
 
 const app = express();
 const server = new Server(app);
@@ -24,6 +26,22 @@ const CORS_OPTIONS = {
 };
 
 app.use("/public", express.static(path.join(__dirname, "./public")));
+
+const swaggerOptions = {
+  swaggerDefinition: {
+    info: {
+      title: "OP Logger",
+      version: "1.0.0",
+      description: "Alows on-prem (local) logging via REST and Socket Events",
+    },
+    host: `localhost:${PORT}`,
+    basePath: "/",
+  },
+  apis: ["./app.js"],
+};
+const swaggerSpec = swaggerJSDoc(swaggerOptions);
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use(cors(CORS_OPTIONS));
 
