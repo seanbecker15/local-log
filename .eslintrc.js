@@ -20,5 +20,8 @@ module.exports = {
   parserOptions: {
     ecmaVersion: "latest",
   },
-  rules: {},
+  rules: {
+    "valid-jsdoc": "off",
+    "require-jsdoc": "off",
+  },
 };
