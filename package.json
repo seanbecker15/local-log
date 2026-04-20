@@ -20,7 +20,7 @@
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
-    "eslint": "^9.39.1",
+    "eslint": "^10.2.1",
     "eslint-config-google": "^0.14.0",
     "eslint-config-prettier": "^10.1.2",
     "nodemon": "^3.1.10",
