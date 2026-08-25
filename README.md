@@ -28,8 +28,11 @@ sub-agents) can watch the same buffer with different filters.
 
 ## Wiring an app
 
-The agent does this once per project (`hint` prints the interface list; `hint` with
-`interface: "<name>"` prints one snippet with the real URL filled in):
+The agent does this once per project. `hint` is built facts-first: called bare it returns the
+questions to answer from the codebase (which logger does the code call, is its level gated by
+flags, where does it run, …); called with those facts it returns **one** deterministic
+recommendation with its snippet — so the pick depends on what the code logs *through*, never on
+"it's a web app". `hint` with `interface: "<name>"` still fetches any snippet directly:
 
 1. **Find the logger.** Grep for a shared logger module or class (`logger.`, `createLogger`,
    `pino(`, `winston`, `consola`, `log4js`, …) or plain `console.*`, and check what the dev
@@ -48,7 +51,7 @@ echoed to your terminal.
 npm run dev 2>&1 | npx -y tiny-log-mcp pipe --source api
 ```
 
-### B. A browser page — inject `client.js`
+### B. A browser page logging with plain `console.*` — inject `client.js`
 
 Hooks `console.*`, `window.onerror` and `unhandledrejection`, batches, and silently no-ops when
 the listener is down. The page keeps its own origin — the client POSTs cross-origin to the
@@ -173,7 +176,7 @@ makes the cleanup a grep.
 | Tool         | Arguments                                                                  | Purpose                                                                                                     |
 | ------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the URL, the cursor, and the stream address to watch with Monitor. |
-| `hint`       | `interface?`                                                               | How to wire the app: the interface list, or one snippet (`browser`, `logger-methods`, `transport`, …). |
+| `hint`       | `logger?`, `logger_package?`, `level_gated?`, `runs_in?`, `emits_ndjson?`, `language?`, `interface?` | Facts in, verdict out: pass what you found in the codebase and get one recommendation + snippet. Bare: the questions. `interface=<name>`: one snippet directly. |
 | `read_logs`  | `after?`, `level_min?`, `include?`, `exclude?`, `source?`, `limit?`, `max_chars?` | Read buffered entries, oldest first, as compact text. Returns a cursor to pass back as `after`.       |
 | `await_logs` | same as `read_logs` + `until?`, `settle_ms?`, `timeout_ms?`               | Block until matching entries arrive (default 60 s, max 10 min). `until` returns everything through a terminal line; `settle_ms` gathers a burst. |
 | `clear_logs` | —                                                                          | Discard the buffer. The cursor keeps counting, so prefer `after` when other agents may be reading.          |

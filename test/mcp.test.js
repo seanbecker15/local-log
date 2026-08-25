@@ -82,16 +82,62 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   assert.ok(listen.content[0].text.split("\n").length < 14);
 
   const index = await callTool("hint");
-  assert.match(index.content[0].text, /logger-methods/);
+  assert.match(index.content[0].text, /grep — don't guess/);
+  assert.match(index.content[0].text, /level_gated/);
+  assert.match(index.content[0].text, /logs THROUGH, not where it runs/);
+  assert.ok(
+    index.content[0].text.indexOf("logger-methods") < index.content[0].text.indexOf("console "),
+    "logger question comes before the page-specific entry",
+  );
+
+  // Facts → verdict: a web app with its own logger whose level is flag-controlled.
+  const gatedWeb = await callTool("hint", {
+    runs_in: "browser",
+    logger: "AppLogger",
+    level_gated: true,
+  });
+  assert.match(gatedWeb.content[0].text, /^Recommendation: wrap AppLogger/);
+  assert.match(gatedWeb.content[0].text, /before the logger's own level check/);
+  assert.match(gatedWeb.content[0].text, /Also load client\.js in the page/);
+  assert.doesNotMatch(gatedWeb.content[0].text, /Recommendation: client\.js —/);
+
+  // pino backend printing NDJSON → pipe wins; without NDJSON → only pino's transport line.
+  const pinoPipe = await callTool("hint", {
+    runs_in: "node",
+    logger: "src/logger.ts",
+    logger_package: "pino",
+    emits_ndjson: true,
+  });
+  assert.match(
+    pinoPipe.content[0].text,
+    /^Recommendation: pipe the dev command's stdout — pino already prints NDJSON/,
+  );
+  const pinoHook = await callTool("hint", {
+    runs_in: "node",
+    logger: "src/logger.ts",
+    logger_package: "pino",
+  });
+  assert.match(pinoHook.content[0].text, /one line on pino's transport hook/);
+  assert.match(pinoHook.content[0].text, /pino\(\{ level: "trace" \}/);
+  assert.doesNotMatch(pinoHook.content[0].text, /winston/);
+
+  // Plain-console page and non-JS.
+  const page = await callTool("hint", { runs_in: "browser", logger: "console" });
+  assert.match(page.content[0].text, /^Recommendation: client\.js/);
+  const py = await callTool("hint", { language: "python" });
+  assert.match(py.content[0].text, /logging\.Handler/);
+  assert.match(py.content[0].text, /pipe --source/);
   assert.match(index.content[0].text, /level would drop/);
   assert.doesNotMatch(index.content[0].text, /tap\(console/);
-  const browser = await callTool("hint", { interface: "browser" });
+  const browser = await callTool("hint", { interface: "console" });
   assert.match(browser.content[0].text, /client\.js/);
   assert.match(browser.content[0].text, /DevTools console/);
+  assert.match(browser.content[0].text, /wrap that too/);
   assert.doesNotMatch(browser.content[0].text, /pino:/);
   const methods = await callTool("hint", { interface: "logger-methods" });
   assert.match(methods.content[0].text, /tap\(console/);
   assert.match(methods.content[0].text, /level is off/);
+  assert.match(methods.content[0].text, /browser page included/);
   const everything = await callTool("hint", { interface: "all" });
   assert.match(everything.content[0].text, /pipe --source/);
   assert.match(everything.content[0].text, /roarr/);

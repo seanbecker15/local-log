@@ -17,7 +17,7 @@ Ephemeral local log collector + MCP server. Zero runtime dependencies, Node ≥ 
 - `src/filter.js` — the one filter vocabulary (`after`, `level_min`, `include`, `exclude`, `source`, `limit`) shared by HTTP and MCP.
 - `src/server.js` — `node:http` routes: `/ingest`, `/logs`, `/events` (SSE), `/stream` (WebSocket, for Monitor/`tail`), `/health`, static UI + `/client.js`.
 - `src/ws.js` — minimal server-side WebSocket (handshake, text frames out, close/ping in); `src/tail.js` — `/stream` client for the CLI.
-- `src/mcp.js` — tools (`listen`, `hint`, `read_logs`, `await_logs`, `clear_logs`), the always-loaded `INSTRUCTIONS`, and the per-interface wiring guide; `src/jsonrpc.js` — stdio JSON-RPC framing.
+- `src/mcp.js` — tools (`listen`, `hint`, `read_logs`, `await_logs`, `clear_logs`), the always-loaded `INSTRUCTIONS`, the per-interface wiring guide, and `recommend()` — the deterministic facts→verdict table behind `hint`. Wiring choices belong in that table, not in prose the agent must interpret; `src/jsonrpc.js` — stdio JSON-RPC framing.
 - `src/pipe.js` — stdin → `/ingest` (NDJSON-aware, ANSI-stripped, stack frames merged).
 - `public/` — web UI and the browser drop-in client. No build step.
 
