@@ -107,15 +107,16 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   assert.match(wr, /comfortable shipping/);
   assert.match(wr, /adjust the level locally \(dev-gated\)\. Don't fight the gate\./);
   assert.match(wr, /Forward from the wrapper/);
+  assert.match(wr, /before any branching/);
+  assert.match(wr, /NODE_ENV === "development"/);
   assert.match(wr, /entries: \[\{ level, args \}\]/);
+  assert.match(wr, /\.stack/);
+  assert.match(wr, /no monkey-patching prototypes/);
   // The wrapper recipe never mentions client.js — not even to forbid it.
   assert.doesNotMatch(wr, /client\.js/);
-  assert.match(wr, /Example — a class wrapper/);
-  assert.match(wr, /Logger\.prototype\[level\]/);
-  assert.match(wr, /a\.stack/);
   // Every snippet interpolates the real URL — no template leftovers.
   assert.doesNotMatch(wr, /\$\{url\}/);
-  assert.equal(wr.match(/http:\/\/127\.0\.0\.1:\d+\/ingest/g)?.length, 2);
+  assert.equal(wr.match(/http:\/\/127\.0\.0\.1:\d+\/ingest/g)?.length, 1);
   assert.match(wr, /Save the setup/);
 
   // native: console.* plus injection — no tap, no forward note.
