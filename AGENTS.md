@@ -51,4 +51,5 @@ Ephemeral local log collector + MCP server. Zero runtime dependencies, Node ≥ 
 - Keep `seq` monotonic across `clear()`; keep the waiter snapshot-then-clear order in `store.add` (see the regression test).
 - Only `/ingest` is cross-origin. Reads stay same-origin (`/stream` checks `Origin` on upgrade) so a web page cannot exfiltrate dev logs.
 - Prompt text (`INSTRUCTIONS`, tool descriptions, `hint`) is product surface: change it deliberately, from observed agent behaviour, and don't overfit it to one incident.
-- Every change to the tool surface needs a matching update in `test/mcp.test.js` and the README table.
+- Every change to the tool surface needs a matching update in `test/mcp.test.js`, the README table
+  and `docs/reference.md`.
