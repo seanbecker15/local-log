@@ -38,7 +38,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/seanbecker15/local-log.git"
+    "url": "git+https://github.com/seanbecker15/tiny-log-mcp.git"
   },
   "publishConfig": {
     "access": "public"
@@ -48,5 +48,9 @@
     "@types/node": "^24.13.3",
     "typescript": "^7.0.2"
   },
-  "packageManager": "pnpm@11.23.0"
+  "packageManager": "pnpm@11.23.0",
+  "homepage": "https://github.com/seanbecker15/tiny-log-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/seanbecker15/tiny-log-mcp/issues"
+  }
 }
