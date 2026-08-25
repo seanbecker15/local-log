@@ -140,14 +140,36 @@ test("DELETE /logs clears and /health reports", async () => {
   assert.equal(health.body.size, 0);
 });
 
-test("serves the UI, the browser client and 404s elsewhere", async () => {
+test("serves the UI assets, the browser client and 404s elsewhere", async () => {
   const ui = await fetch(`${listener.url}/`);
   assert.equal(ui.headers.get("content-type"), "text/html; charset=utf-8");
   assert.match(await ui.text(), /tiny-log-mcp/);
+  const app = await fetch(`${listener.url}/index.js`);
+  assert.equal(app.headers.get("content-type"), "text/javascript; charset=utf-8");
+  assert.match(await app.text(), /Coalesce an SSE replay or live burst/);
+  const styles = await fetch(`${listener.url}/index.css`);
+  assert.equal(styles.headers.get("content-type"), "text/css; charset=utf-8");
+  assert.match(await styles.text(), /content: attr\(data-empty\)/);
   const client = await fetch(`${listener.url}/client.js`);
   assert.equal(client.status, 200);
   assert.match(await client.text(), /unhandledrejection/);
   assert.equal((await fetch(`${listener.url}/nope`)).status, 404);
+});
+
+test("GET /events connects immediately when the buffer is empty", async () => {
+  store.clear();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1000);
+  try {
+    const res = await fetch(`${listener.url}/events`, { signal: controller.signal });
+    assert.equal(res.status, 200);
+    const reader = res.body.getReader();
+    const { value } = await reader.read();
+    assert.match(new TextDecoder().decode(value), /: connected/);
+    await reader.cancel();
+  } finally {
+    clearTimeout(timeout);
+  }
 });
 
 test("GET /events streams existing and new entries", async () => {

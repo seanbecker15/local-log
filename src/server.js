@@ -253,6 +253,10 @@ function events(store, req, res) {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
+  // Send a comment immediately so headers reach EventSource even when the
+  // buffer is empty. Otherwise the UI stays "connecting" until the first log
+  // or the 25-second heartbeat.
+  res.write(": connected\n\n");
   /** @type {import("./store.js").Subscriber} */
   const send = (event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);

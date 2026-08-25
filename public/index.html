@@ -9,16 +9,23 @@
   <body>
     <header>
       <strong>tiny-log-mcp</strong>
-      <input id="filter" type="search" placeholder="filter (regex)" autocomplete="off" />
-      <select id="level" title="minimum level">
+      <input
+        id="filter"
+        type="search"
+        placeholder="filter logs (regex)"
+        autocomplete="off"
+        aria-label="Filter logs with a regular expression"
+        aria-keyshortcuts="/"
+      />
+      <select id="level" aria-label="Minimum log level">
         <option value="trace">trace+</option>
         <option value="debug">debug+</option>
         <option value="info">info+</option>
         <option value="warn">warn+</option>
         <option value="error">error+</option>
       </select>
-      <label><input id="follow" type="checkbox" checked /> follow</label>
-      <button id="clear" type="button">clear</button>
+      <label class="follow"><input id="follow" type="checkbox" checked /> follow</label>
+      <button id="clear" type="button" aria-label="Clear logs">clear</button>
       <span id="status" aria-live="polite"></span>
     </header>
     <ol id="log"></ol>
