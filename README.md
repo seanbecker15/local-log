@@ -45,9 +45,10 @@ anything can always `POST /ingest`):
 3. **If there is no log implementation**, log with `console.*`.
 4. **Call `hint` with the log implementation** — `hint({logs: "wrapper" | "native" | "none"})` —
    and get the exact recipe: make the logs flow (the rules above with snippets filled in), then
-   deliver them by injecting `client.js` (DevTools one-liner with no code change, or a dev-gated
-   tag in source), which forwards `console.*` and uncaught errors. Wrappers that never reach the
-   console get a one-line direct forward instead.
+   deliver them. Delivery matches the implementation: a **wrapper** forwards from the wrapper
+   itself (one dev-gated `fetch` where it emits — you're already editing it to adjust the level);
+   **native**/**none** inject `client.js` (DevTools one-liner with no code change, or a dev-gated
+   tag in source), which forwards `console.*` and uncaught errors.
 
 **A phone or another machine** — bind to all interfaces: `listen` with `host: "0.0.0.0"` (or
 `TINY_LOG_HOST=0.0.0.0`). The tool prints the LAN addresses to use.

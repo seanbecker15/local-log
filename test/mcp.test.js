@@ -101,17 +101,22 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   assert.match(wrong.content[0].text, /logs=native {3}the code logs straight with console/);
   assert.doesNotMatch(wrong.content[0].text, /Wire it in two steps/);
 
-  // wrapper: use it at shippable levels, don't fight the gate, tap only as last resort.
+  // wrapper: use it at shippable levels, don't fight the gate, deliver FROM the wrapper.
   const wrapper = await callTool("hint", { logs: "wrapper" });
   const wr = wrapper.content[0].text;
   assert.match(wr, /comfortable shipping/);
   assert.match(wr, /adjust the level locally \(dev-gated\)\. Don't fight the gate\./);
-  assert.match(wr, /Only if the level truly cannot be changed/);
+  assert.match(wr, /Forward from the wrapper/);
+  assert.match(wr, /entries: \[\{ level, args \}\]/);
+  // The wrapper recipe never mentions client.js — not even to forbid it.
+  assert.doesNotMatch(wr, /client\.js/);
+  assert.match(wr, /Example — a class wrapper/);
   assert.match(wr, /Logger\.prototype\[level\]/);
-  assert.match(wr, /client\.js/);
-  assert.match(wr, /paste in DevTools/);
-  assert.match(wr, /never reaches console, forward it directly/);
-  assert.match(wr, /save the setup/);
+  assert.match(wr, /a\.stack/);
+  // Every snippet interpolates the real URL — no template leftovers.
+  assert.doesNotMatch(wr, /\$\{url\}/);
+  assert.equal(wr.match(/http:\/\/127\.0\.0\.1:\d+\/ingest/g)?.length, 2);
+  assert.match(wr, /Save the setup/);
 
   // native: console.* plus injection — no tap, no forward note.
   const native = await callTool("hint", { logs: "native" });

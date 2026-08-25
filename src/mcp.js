@@ -400,8 +400,10 @@ function describeListener({ url, host, port }, cursor) {
 /**
  * The wiring recipe for a web app with the given log implementation: make the
  * logs flow, get them to the listener, verify. Opinionated on purpose — the
- * rules live in the instructions; this fills in the snippets. Web-only for
- * now; recipes for more ecosystems are welcome contributions.
+ * rules live in the instructions; this fills in the snippets. Delivery matches
+ * the implementation: a wrapper forwards from the wrapper; client.js is
+ * reserved for apps logging with plain console.*. Web-only for now; recipes
+ * for more ecosystems are welcome contributions.
  *
  * @param {string} url
  * @param {string} logs
@@ -413,60 +415,51 @@ function recipe(url, logs) {
   if (logs === "wrapper") {
     lines.push(
       "",
-      "1. Make the logs flow through the app's own logger:",
-      "   Insert logs through the wrapper at levels the user would be comfortable shipping — a recognizable prefix is fine; dev-gate anything temporary.",
-      "   If its level is gated by config/env/feature flags, adjust the level locally (dev-gated). Don't fight the gate.",
-      "   Only if the level truly cannot be changed, wrap the level methods so calls bypass the gate:",
-      ...tapSnippet(url),
+      "1. Make the logs flow through the wrapper:",
+      "   Insert logs at levels the user would be comfortable shipping; prefix and dev-gate anything temporary.",
+      "   If the level is gated by config/env/feature flags, adjust the level locally (dev-gated). Don't fight the gate.",
+      "",
+      "2. Forward from the wrapper: in the method every level funnels through, after the original behavior, add one dev-gated line:",
+      `     fetch("${url}/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "app", entries: [{ level, args }] }) }).catch(() => {});`,
+      "   level = the method's level name; args = the call's arguments, with Error values mapped to their .stack (JSON.stringify drops Error fields). The server joins args and normalizes levels. Delivery must never throw.",
+      "   Example — a class wrapper, tapped in one dev-gated block instead of editing each method:",
+      `     const send = (level, args) => fetch("${url}/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "app", entries: [{ level, args }] }) }).catch(() => {});`,
+      "     const fmt = (a) => (a instanceof Error ? (a.stack ?? String(a)) : a);",
+      '     for (const level of ["trace", "debug", "log", "info", "warn", "error", "fatal"]) {',
+      "       const original = Logger.prototype[level];",
+      '       if (typeof original !== "function") continue;',
+      "       Logger.prototype[level] = function (...args) { send(level, args.map(fmt)); return original.apply(this, args); };",
+      "     }",
+      '   To also capture uncaught errors and unhandled rejections, forward window "error" and "unhandledrejection" events the same way.',
     );
   } else if (logs === "native") {
     lines.push(
       "",
       "1. Make the logs flow: log with console.* as usual; add what you need at levels the user would keep.",
+      "",
+      ...clientJsStep(url),
     );
   } else {
     lines.push(
       "",
       "1. Make the logs flow: the code barely logs — add logs with console.* at levels the user would be comfortable shipping; prefix temporary ones and dev-gate them.",
+      "",
+      ...clientJsStep(url),
     );
   }
 
   lines.push(
     "",
-    "2. Get them to tiny-log — inject client.js; it forwards console.* and uncaught errors" +
-      (logs === "wrapper" ? " (the wrapper's output arrives once it reaches console):" : ":"),
-    `   no code change (paste in DevTools, lost on reload): (s => { s.src = "${url}/client.js"; s.dataset.source = "web"; document.head.append(s); })(document.createElement("script"))`,
-    `   in source (dev-gated, survives reloads): <script src="${url}/client.js" data-source="web"></script> — Vite: index.html · Next: app/layout · CRA: public/index.html; template not in the repo? run the injection line from the entry module instead.`,
-    ...(logs === "wrapper" ? forwardNote(url) : []),
-  );
-
-  lines.push(
-    "",
-    "3. Verify: emit one test log and read it back with read_logs. Then save the setup (logs, hook location, filters) to the project's agent docs or your project memory — the next session skips this.",
+    "3. Verify: emit one test log and read it back with read_logs. Save the setup (logs, hook location, filters) to the project's agent docs or your project memory.",
   );
   return lines;
 }
 
-/** The method tap, for a wrapper whose level truly cannot be changed. @param {string} url @returns {string[]} */
-function tapSnippet(url) {
+/** client.js delivery, for apps logging with plain console.*. @param {string} url @returns {string[]} */
+function clientJsStep(url) {
   return [
-    `     const send = (source, entries) => fetch("${url}/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, entries }) }).catch(() => {});`,
-    "     const fmt = (a) => (a instanceof Error ? (a.stack ?? String(a)) : a);",
-    '     for (const level of ["trace", "debug", "log", "info", "warn", "error", "fatal"]) {',
-    "       const original = Logger.prototype[level];",
-    '       if (typeof original !== "function") continue;',
-    "       Logger.prototype[level] = function (...args) {",
-    '         send("app", [{ level, args: args.map(fmt) }]);',
-    "         return original.apply(this, args);",
-    "       };",
-    "     }",
-  ];
-}
-
-/** For wrappers that never reach console: forward records directly. @param {string} url @returns {string[]} */
-function forwardNote(url) {
-  return [
-    "   If the wrapper's output never reaches console, forward it directly (one dev-gated line where it emits):",
-    `     fetch("${url}/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "app", entries: [{ level, args }] }) }).catch(() => {})`,
+    "2. Get them to tiny-log — inject client.js; it forwards console.* and uncaught errors:",
+    `   no code change (paste in DevTools, lost on reload): (s => { s.src = "${url}/client.js"; s.dataset.source = "web"; document.head.append(s); })(document.createElement("script"))`,
+    `   in source (dev-gated, survives reloads): <script src="${url}/client.js" data-source="web"></script> — Vite: index.html · Next: app/layout · CRA: public/index.html; template not in the repo? run the injection line from the entry module instead.`,
   ];
 }
