@@ -30,9 +30,10 @@ sub-agents) can watch the same buffer with different filters.
 
 The agent does this once per project. `hint` is built facts-first: called bare it returns the
 questions to answer from the codebase (which logger does the code call, is its level gated by
-flags, where does it run, …); called with those facts it returns **one** deterministic
-recommendation with its snippet — so the pick depends on what the code logs *through*, never on
-"it's a web app". `hint` with `interface: "<name>"` still fetches any snippet directly:
+flags, where does it run, …); called with those facts it returns the **applicable options with
+trade-offs**, which the agent presents to you — with the concrete file paths it found — so you
+pick. Your app knowledge beats its inference; "Other" is always on the menu. `hint` with
+`interface: "<name>"` still fetches any snippet directly:
 
 1. **Find the logger.** Grep for a shared logger module or class (`logger.`, `createLogger`,
    `pino(`, `winston`, `consola`, `log4js`, …) or plain `console.*`, and check what the dev
@@ -173,8 +174,7 @@ check its project memory and the project's agent docs (`AGENTS.md`/`CLAUDE.md`) 
 tiny-log setup before investigating, and — after the read-back verification passes — to record the
 facts, approach, hook location and filters there (shared docs preferred, so teammates' agents
 benefit). Temporary tagged log lines get removed; the dev-gated hook itself is worth keeping
-committed. If a recorded approach stops working, `hint` takes `tried: "<interface>"` and
-deterministically names the next-best.
+committed. If a recorded approach stops working, the agent presents the remaining options again.
 
 **A phone or another machine** — bind to all interfaces: `listen` with `host: "0.0.0.0"` (or
 `TINY_LOG_HOST=0.0.0.0`). The tool prints the LAN addresses to use.
@@ -184,7 +184,7 @@ deterministically names the next-best.
 | Tool         | Arguments                                                                  | Purpose                                                                                                     |
 | ------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the URL, the cursor, and the stream address to watch with Monitor. |
-| `hint`       | `logger?`, `logger_package?`, `level_gated?`, `runs_in?`, `emits_ndjson?`, `language?`, `tried?`, `interface?` | Facts in, verdict out: pass what you found in the codebase and get one recommendation + snippet. Bare: the questions. `interface=<name>`: one snippet directly. |
+| `hint`       | `logger?`, `logger_package?`, `level_gated?`, `runs_in?`, `emits_ndjson?`, `language?`, `interface?` | Facts in, options out: the applicable ways to wire the app, with trade-offs, for the user to pick from. Bare: the questions. `interface=<name>`: one snippet directly. |
 | `read_logs`  | `after?`, `level_min?`, `include?`, `exclude?`, `source?`, `limit?`, `max_chars?` | Read buffered entries, oldest first, as compact text. Returns a cursor to pass back as `after`.       |
 | `await_logs` | same as `read_logs` + `until?`, `settle_ms?`, `timeout_ms?`               | Block until matching entries arrive (default 60 s, max 10 min). `until` returns everything through a terminal line; `settle_ms` gathers a burst. |
 | `clear_logs` | —                                                                          | Discard the buffer. The cursor keeps counting, so prefer `after` when other agents may be reading.          |

@@ -28,8 +28,8 @@ export const GUIDES = [
 export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under development (browser, phone/device, backend process) into a buffer you can read or watch. Reach for it whenever you need to see what the app printed instead of asking the user to paste console output.
 
 Setup, once per project:
-1. Check your project memory and the project's agent docs (AGENTS.md/CLAUDE.md) for a saved tiny-log setup from an earlier session. If one exists, reuse it: call \`listen\` and skip straight to verifying. If it is recorded as having failed, pass its interface as \`tried\` when you call hint.
-2. Otherwise call \`listen\` for the URL and the stream address, then \`hint\` for the facts to gather; answer them from the codebase and call hint again for one recommendation.
+1. Check your project memory and the project's agent docs (AGENTS.md/CLAUDE.md) for a saved tiny-log setup from an earlier session. If one exists, reuse it: call \`listen\` and skip straight to verifying. If it is recorded as having failed, present the remaining options to the user instead.
+2. Otherwise call \`listen\` for the URL and the stream address, then \`hint\` for the facts to gather; answer them from the codebase and call hint again for the applicable options. When a user is present and the options differ materially (a source change versus none), present them with the concrete paths you found and let the user pick — their app knowledge beats inference. No user, or one obvious fit: take the least invasive.
 3. Find the app's logger (a shared logger module or class, or plain console.*) and what the dev command prints. If the code already logs what you need, capture those calls — wrapping the logger's methods captures them even when its level is off or flag-controlled — before adding any log calls of your own. If you must add some, tag them with a unique marker and remove every tagged line when done; the dev-gated hook itself is worth keeping committed, it is what makes the next session instant.
 4. Hook it by what the code logs THROUGH, not where it runs — a web app with its own logger wants logger-methods (the tap runs in the page), while console/client.js covers plain console.* and uncaught errors; they compose. Prefer hooks that need no source change (stdout pipe, DevTools injection). Call through to the original, dev-gate any source change, never let delivery throw.
 5. Verify with one test log and read_logs. Then save the setup — the facts you passed to hint, the approach and where the hook lives, the filters with good signal, and how smoothly it went — to the project's agent docs if the project keeps them (teammates' agents benefit), else to your own project memory.
@@ -134,11 +134,12 @@ export function createTools({ store, defaults = {} }) {
     {
       name: "hint",
       description:
-        "How to wire the app's logs to the listener. Preferred: investigate the codebase, then " +
-        "pass what you found (logger, logger_package, level_gated, runs_in, …) and get one " +
-        "recommendation with its snippet — the choice depends on what the code logs THROUGH, " +
-        "not where it runs. Without arguments: the questions to answer. interface=<name> skips " +
-        "straight to one snippet (logger-methods, transport, console, stdout, other-language, http, all).",
+        "How to wire the app's logs to the listener. Investigate the codebase, pass what you " +
+        "found (logger, logger_package, level_gated, runs_in, …), and get the applicable options " +
+        "with trade-offs — present them to the user and let them pick when they differ " +
+        "materially; their app knowledge beats inference. Without arguments: the questions to " +
+        "answer. interface=<name> skips straight to one snippet (logger-methods, transport, " +
+        "console, stdout, other-language, http, all).",
       inputSchema: {
         type: "object",
         properties: {
@@ -175,11 +176,6 @@ export function createTools({ store, defaults = {} }) {
             description:
               "true if the dev command prints JSON log lines (pino/bunyan style) to stdout.",
           },
-          tried: {
-            type: "string",
-            description:
-              'Interface name(s) already attempted that did not work out, comma-separated (e.g. "console" or "console,stdout"). The recommendation avoids them and explains the next-best.',
-          },
           interface: {
             type: "string",
             enum: [...GUIDES, "all"],
@@ -194,7 +190,7 @@ export function createTools({ store, defaults = {} }) {
           return GUIDES.map((g) => wiringGuide(current.url, g).join("\n")).join("\n\n");
         if (name) return wiringGuide(current.url, name).join("\n");
         if (Object.values(facts).some((value) => value !== undefined && value !== "")) {
-          return recommend(current.url, facts).join("\n");
+          return buildOptions(facts).join("\n");
         }
         return wiringIndex().join("\n");
       },
@@ -438,16 +434,15 @@ function describeListener({ url, host, port }, cursor) {
 /** The short form: what exists, and how to ask for one snippet. */
 function wiringIndex() {
   return [
-    "Answer these from the codebase (grep — don't guess), then call hint again with what you found for one tailored recommendation:",
+    "Answer these from the codebase (grep — don't guess), then call hint again with what you found for the applicable options to put in front of the user:",
     '  logger          the shared logger module/class the code calls (grep for logger., createLogger, getLogger, class Logger); "console" or "none" if there is not one',
     "  logger_package  the underlying package if identifiable: pino, winston, bunyan, consola, tslog, log4js, loglevel, debug, roarr, or custom",
     "  level_gated     true if the effective level comes from config/env/feature flags you can't change locally",
     "  runs_in         browser | node | react-native | electron | other",
     "  emits_ndjson    true if the dev command prints JSON log lines to stdout",
     '  language        "js"/"ts", or the language if not JavaScript',
-    "  tried           interface name(s) already attempted that did not work out, comma-separated — the recommendation will avoid them",
     "",
-    "For orientation — the interfaces a recommendation draws from (interface=<name> fetches one directly). The pick depends on what the code logs THROUGH, not where it runs:",
+    "For orientation — the interfaces the options draw from (interface=<name> fetches one directly). What applies depends on what the code logs THROUGH, not where it runs:",
     "  logger-methods  wrap a logger object/class's level methods (captures calls even when the logger's level is off or flag-controlled)",
     "  transport       one line on a logger's transport/stream/reporter hook (pino, winston, bunyan, consola, …)",
     "  console         client.js for a page's plain console.* + uncaught errors; composes with logger-methods when a page has both",
@@ -540,7 +535,7 @@ function wiringGuide(url, name) {
   }
 }
 
-/** One-line hook per known transport-style logger, shared by the guide and recommend(). */
+/** One-line hook per known transport-style logger, shared by the guide and buildOptions(). */
 const TRANSPORT_LINES = {
   pino: 'pino({ level: "trace" }, { write: (line) => send("api", [JSON.parse(line)]) })',
   winston:
@@ -559,16 +554,15 @@ const TRANSPORT_LINES = {
 const JS_NAMES = new Set(["", "js", "ts", "javascript", "typescript", "node", "jsx", "tsx"]);
 
 /**
- * Deterministic wiring verdict from investigated facts. The decision the agent
- * used to make by pattern-matching lives here instead, so "it's a web app" can
- * never again shadow "the app has its own logger". `tried` removes approaches
- * that already failed; the verdict then names the next-best.
+ * The applicable wiring options for these facts, roughly ordered by fit — a
+ * filter, not a judge. The agent puts them in front of the user with the
+ * concrete paths it found; the user's pick wins, because deciding is cheap
+ * for the human and unreliable for the agent.
  *
- * @param {string} url
- * @param {{language?: string, runs_in?: string, logger?: string, logger_package?: string, level_gated?: boolean, emits_ndjson?: boolean, tried?: string}} facts
+ * @param {{language?: string, runs_in?: string, logger?: string, logger_package?: string, level_gated?: boolean, emits_ndjson?: boolean}} facts
  * @returns {string[]}
  */
-function recommend(url, facts) {
+function buildOptions(facts) {
   const language = String(facts.language ?? "").toLowerCase();
   const runsIn = String(facts.runs_in ?? "");
   const logger = String(facts.logger ?? "").trim();
@@ -577,104 +571,87 @@ function recommend(url, facts) {
   const ndjson = facts.emits_ndjson === true;
   const inBrowser = runsIn === "browser";
   const hasLogger = logger !== "" && !["console", "none"].includes(logger.toLowerCase());
-  const knownTransport = pkg in TRANSPORT_LINES;
-  const tried = new Set(
-    String(facts.tried ?? "")
-      .toLowerCase()
-      .split(/[\s,]+/)
-      .filter((name) => GUIDES.includes(name)),
-  );
 
-  /** Preference order for these facts; the verdict is the first not yet tried. */
-  let order;
+  /** @type {Array<[string, string, string]>} */
+  const options = [];
   if (!JS_NAMES.has(language)) {
-    order = ["other-language", ...(inBrowser ? [] : ["stdout"]), "http"];
-  } else if (hasLogger && (gated || !knownTransport)) {
-    order = [
-      "logger-methods",
-      ...(knownTransport ? ["transport"] : []),
-      inBrowser ? "console" : "stdout",
-      "http",
-    ];
-  } else if (hasLogger && knownTransport) {
-    order =
-      !inBrowser && ndjson
-        ? ["stdout", "transport", "logger-methods", "http"]
-        : ["transport", "logger-methods", inBrowser ? "console" : "stdout", "http"];
-  } else if (inBrowser) {
-    order = ["console", "logger-methods", "http"];
-  } else if (runsIn === "react-native") {
-    order = ["logger-methods", "http"];
+    options.push([
+      "other-language",
+      `a ${facts.language} handler/sink`,
+      "one class wired into the logging config; keeps level and message",
+    ]);
+    if (!inBrowser) {
+      options.push([
+        "stdout",
+        "pipe the dev command's stdout",
+        "no code change; captures only what reaches stdout",
+      ]);
+    }
   } else {
-    order = ["stdout", "logger-methods", "http"];
-  }
-  const pick = order.find((name) => !tried.has(name)) ?? "http";
-
-  const lines = [];
-  if (pick !== order[0]) {
-    lines.push(`Already tried: ${[...tried].join(", ")} — next best given the facts: ${pick}.`);
-  } else if (pick === "other-language") {
-    lines.push(
-      `Recommendation: the ${facts.language} handler/sink shape${inBrowser ? "" : " — or pipe the process's stdout, which needs no code change"}.`,
-    );
-  } else if (pick === "logger-methods" && hasLogger) {
-    lines.push(
-      `Recommendation: wrap ${logger}'s level methods (logger-methods).` +
+    if (hasLogger) {
+      options.push([
+        "logger-methods",
+        `wrap ${logger}'s level methods`,
         (gated
-          ? " The wrapper runs before the logger's own level check, so it captures every call even though the effective level is gated by config/flags you can't change locally."
-          : " Capturing through the logger the code already calls beats adding new log statements."),
-    );
-  } else if (pick === "logger-methods") {
-    lines.push(
-      "Recommendation: wrap console with the logger-methods tap (React Native has no DOM for client.js).",
-    );
-  } else if (pick === "stdout") {
-    lines.push(
-      ndjson && hasLogger
-        ? `Recommendation: pipe the dev command's stdout — ${pkg || "the logger"} already prints NDJSON there, so levels, timestamps and fields survive with no code change.`
-        : "Recommendation: pipe the dev command's stdout — no code change, and console output lands there.",
-    );
-  } else if (pick === "transport") {
-    lines.push(
-      `Recommendation: one line on ${pkg}'s transport hook — records arrive with level, message and fields intact.`,
-    );
-  } else if (pick === "console") {
-    lines.push(
-      "Recommendation: client.js — the page logs with plain console.*, and it also catches uncaught errors and rejections.",
-    );
-  } else {
-    lines.push(
-      "Recommendation: POST /ingest directly — it works from anything that can make an HTTP request.",
-    );
+          ? "captures every call even though the level is flag/config-gated (the wrapper runs before the level check); "
+          : "captures the calls the code already makes; ") +
+          "one dev-gated source change, survives reloads",
+      ]);
+    } else if (runsIn === "react-native") {
+      options.push([
+        "logger-methods",
+        "wrap console with the tap",
+        "React Native has no DOM for client.js",
+      ]);
+    }
+    if (pkg in TRANSPORT_LINES) {
+      options.push([
+        "transport",
+        `one line on ${pkg}'s transport hook`,
+        "records keep level, message and fields" +
+          (gated ? "; force its level to trace to beat the gate" : ""),
+      ]);
+    }
+    if (inBrowser) {
+      options.push(
+        [
+          "console",
+          "inject client.js with no code change",
+          "paste in the DevTools console (or via a browser tool); catches console.* and uncaught errors; lost on reload, nothing to clean up",
+        ],
+        [
+          "console",
+          "load client.js from source",
+          "script tag or entry-module injection; survives reloads; dev-gated source change",
+        ],
+      );
+    } else if (runsIn !== "react-native") {
+      options.push([
+        "stdout",
+        "pipe the dev command's stdout",
+        "no code change" +
+          (ndjson
+            ? "; the NDJSON keeps level, time and fields"
+            : "; captures only what reaches stdout, plain-text levels are guessed"),
+      ]);
+    }
   }
+  options.push([
+    "http",
+    "POST /ingest from anything",
+    "raw HTTP; a batch, one object, or plain text",
+  ]);
 
-  lines.push("");
-  if (pick === "transport" && knownTransport) {
-    lines.push(
-      `  const send = (source, entries) => fetch("${url}/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, entries }) }).catch(() => {});`,
-      `  ${TRANSPORT_LINES[pkg]}`,
-    );
-  } else {
-    lines.push(...wiringGuide(url, pick));
-  }
-  if (pick === "other-language" && !inBrowser) lines.push("", ...wiringGuide(url, "stdout"));
-  if (pick === "logger-methods" && knownTransport && !tried.has("transport")) {
-    lines.push(
-      "",
-      `Alternative: ${pkg}'s transport hook with its level forced to trace (hint interface=transport).`,
-    );
-  }
-  if (inBrowser && (pick === "logger-methods" || pick === "transport")) {
-    lines.push(
-      "",
-      "Also load client.js in the page for uncaught errors and rejections (hint interface=console) — both post to the same listener.",
-    );
-  }
-  lines.push(
-    "",
-    "Then verify: emit one test log, read it back with read_logs, and start watching. Once verified, save the setup (facts, approach, hook location, filters) to the project's agent docs or your project memory — the next session skips this investigation. If this approach fails, call hint again with tried=\"" +
-      pick +
-      '".',
+  const rows = options.map(
+    ([name, label, tradeoff], i) =>
+      `${i + 1}. ${label} — ${tradeoff} (snippet: hint interface=${name})`,
   );
-  return lines;
+  return [
+    "Applicable ways to wire this app, roughly ordered by fit. If a user is present and these differ materially (a source change versus none), present them with the concrete paths you found and let the user pick. No user, or one obvious fit: take the least invasive.",
+    "",
+    ...rows,
+    `${options.length + 1}. Other — ask the user; they may know a hook you did not find (a logging util, a debug flag).`,
+    "",
+    "Then verify the pick: emit one test log, read it back with read_logs, and start watching. Once verified, save the chosen setup (facts, approach, hook location, filters) to the project's agent docs or your project memory — the next session skips this.",
+  ];
 }
