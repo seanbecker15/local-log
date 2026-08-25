@@ -168,6 +168,14 @@ logger's names or numbers are normalized), `message` | `msg` | `text` | `args[]`
 (`[TL-123] …`), filter on it with `include`, and remove every tagged line when done — the marker
 makes the cleanup a grep.
 
+**Across sessions** — the setup is meant to be paid for once. The instructions tell the agent to
+check its project memory and the project's agent docs (`AGENTS.md`/`CLAUDE.md`) for a recorded
+tiny-log setup before investigating, and — after the read-back verification passes — to record the
+facts, approach, hook location and filters there (shared docs preferred, so teammates' agents
+benefit). Temporary tagged log lines get removed; the dev-gated hook itself is worth keeping
+committed. If a recorded approach stops working, `hint` takes `tried: "<interface>"` and
+deterministically names the next-best.
+
 **A phone or another machine** — bind to all interfaces: `listen` with `host: "0.0.0.0"` (or
 `TINY_LOG_HOST=0.0.0.0`). The tool prints the LAN addresses to use.
 
@@ -176,7 +184,7 @@ makes the cleanup a grep.
 | Tool         | Arguments                                                                  | Purpose                                                                                                     |
 | ------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the URL, the cursor, and the stream address to watch with Monitor. |
-| `hint`       | `logger?`, `logger_package?`, `level_gated?`, `runs_in?`, `emits_ndjson?`, `language?`, `interface?` | Facts in, verdict out: pass what you found in the codebase and get one recommendation + snippet. Bare: the questions. `interface=<name>`: one snippet directly. |
+| `hint`       | `logger?`, `logger_package?`, `level_gated?`, `runs_in?`, `emits_ndjson?`, `language?`, `tried?`, `interface?` | Facts in, verdict out: pass what you found in the codebase and get one recommendation + snippet. Bare: the questions. `interface=<name>`: one snippet directly. |
 | `read_logs`  | `after?`, `level_min?`, `include?`, `exclude?`, `source?`, `limit?`, `max_chars?` | Read buffered entries, oldest first, as compact text. Returns a cursor to pass back as `after`.       |
 | `await_logs` | same as `read_logs` + `until?`, `settle_ms?`, `timeout_ms?`               | Block until matching entries arrive (default 60 s, max 10 min). `until` returns everything through a terminal line; `settle_ms` gathers a burst. |
 | `clear_logs` | —                                                                          | Discard the buffer. The cursor keeps counting, so prefer `after` when other agents may be reading.          |

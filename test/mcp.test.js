@@ -46,6 +46,8 @@ test("initialize advertises tools and instructions", async () => {
   assert.deepEqual(result.capabilities, { tools: {} });
   assert.equal(result.serverInfo.name, "tiny-log-mcp");
   assert.match(result.instructions, /await_logs/);
+  assert.match(result.instructions, /project memory/);
+  assert.match(result.instructions, /keeping committed/);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
   assert.deepEqual((await request("ping")).result, {});
 });
@@ -84,6 +86,7 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   const index = await callTool("hint");
   assert.match(index.content[0].text, /grep — don't guess/);
   assert.match(index.content[0].text, /level_gated/);
+  assert.match(index.content[0].text, /tried/);
   assert.match(index.content[0].text, /logs THROUGH, not where it runs/);
   assert.ok(
     index.content[0].text.indexOf("logger-methods") < index.content[0].text.indexOf("console "),
@@ -127,6 +130,33 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   const py = await callTool("hint", { language: "python" });
   assert.match(py.content[0].text, /logging\.Handler/);
   assert.match(py.content[0].text, /pipe --source/);
+
+  // Verdicts end with the save-to-memory nudge and a tried escape hatch.
+  assert.match(py.content[0].text, /agent docs or your project memory/);
+  assert.match(py.content[0].text, /tried="other-language"/);
+
+  // tried: the verdict avoids failed approaches and names the next-best.
+  const noConsole = await callTool("hint", {
+    runs_in: "browser",
+    logger: "console",
+    tried: "console",
+  });
+  assert.match(
+    noConsole.content[0].text,
+    /^Already tried: console — next best given the facts: logger-methods/,
+  );
+  assert.match(noConsole.content[0].text, /tap\(console/);
+  const noTap = await callTool("hint", {
+    runs_in: "browser",
+    logger: "AppLogger",
+    level_gated: true,
+    tried: "logger-methods",
+  });
+  assert.match(
+    noTap.content[0].text,
+    /^Already tried: logger-methods — next best given the facts: console/,
+  );
+  assert.match(noTap.content[0].text, /client\.js/);
   assert.match(index.content[0].text, /level would drop/);
   assert.doesNotMatch(index.content[0].text, /tap\(console/);
   const browser = await callTool("hint", { interface: "console" });
