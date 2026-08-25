@@ -1,0 +1,325 @@
+import { readFile } from "node:fs/promises";
+import http from "node:http";
+import { networkInterfaces } from "node:os";
+import pkg from "../package.json" with { type: "json" };
+import { FilterError, MAX_LIMIT, parseFilter } from "./filter.js";
+import { safeStringify } from "./store.js";
+import { errorMessage } from "./util.js";
+
+/** @typedef {import("./store.js").Store} Store */
+/** @typedef {{server: http.Server, host: string, port: number, url: string, close: () => Promise<void>}} Listener */
+
+export const DEFAULT_PORT = 7710;
+export const DEFAULT_HOST = "127.0.0.1";
+export const MAX_WAIT_MS = 60_000;
+const MAX_BODY_BYTES = 5 * 1024 * 1024;
+const SSE_REPLAY = MAX_LIMIT;
+const PUBLIC_DIR = new URL("../public/", import.meta.url);
+
+const STATIC = {
+  "/": ["index.html", "text/html; charset=utf-8"],
+  "/index.css": ["index.css", "text/css; charset=utf-8"],
+  "/index.js": ["index.js", "text/javascript; charset=utf-8"],
+  "/client.js": ["client.js", "text/javascript; charset=utf-8"],
+};
+
+/**
+ * HTTP API over a store:
+ *
+ *   POST   /ingest   {source?, entries: [{level?, message, ts?, meta?}]}  (CORS: any origin)
+ *   GET    /logs     ?after&level_min&include&exclude&source&limit&wait     (same-origin only)
+ *   DELETE /logs
+ *   GET    /events   server-sent events feed for the web UI
+ *   GET    /health
+ *   GET    /         web UI;  GET /client.js  browser drop-in
+ *
+ * Only `/ingest` answers cross-origin requests: the app under development
+ * writes from any origin, but reading the buffer from a web page is limited to
+ * the UI itself so a stray site cannot read your dev logs.
+ *
+ * @param {Store} store
+ * @param {{maxWaitMs?: number}} [options]
+ * @returns {http.Server}
+ */
+export function createServer(store, { maxWaitMs = MAX_WAIT_MS } = {}) {
+  return http.createServer((req, res) => {
+    handle(store, req, res, maxWaitMs).catch((err) => {
+      if (!res.headersSent) sendJson(res, 500, { error: errorMessage(err) });
+      else res.end();
+    });
+  });
+}
+
+/**
+ * Binds a server. If the port is busy, falls back to a free one — the MCP
+ * `listen` tool reports the port actually in use, so the agent always knows.
+ *
+ * @param {Store} store
+ * @param {{port?: number, host?: string, maxWaitMs?: number}} [options]
+ * @returns {Promise<Listener>}
+ */
+export async function startServer(
+  store,
+  { port = DEFAULT_PORT, host = DEFAULT_HOST, maxWaitMs } = {},
+) {
+  const server = createServer(store, { maxWaitMs });
+  try {
+    await listen(server, port, host);
+  } catch (err) {
+    if (
+      !(err instanceof Error) ||
+      /** @type {NodeJS.ErrnoException} */ (err).code !== "EADDRINUSE"
+    ) {
+      throw err;
+    }
+    await listen(server, 0, host);
+  }
+  const address = server.address();
+  const actualPort = address && typeof address === "object" ? address.port : port;
+  return {
+    server,
+    host,
+    port: actualPort,
+    url: `http://${urlHost(host)}:${actualPort}`,
+    close() {
+      server.closeAllConnections();
+      return /** @type {Promise<void>} */ (new Promise((resolve) => server.close(() => resolve())));
+    },
+  };
+}
+
+/** LAN addresses a phone or another machine could reach when bound to 0.0.0.0. */
+export function lanAddresses() {
+  return Object.values(networkInterfaces())
+    .flatMap((list) => list ?? [])
+    .filter((iface) => iface.family === "IPv4" && !iface.internal)
+    .map((iface) => iface.address);
+}
+
+/**
+ * @param {Store} store
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {number} maxWaitMs
+ */
+async function handle(store, req, res, maxWaitMs) {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const { pathname } = url;
+
+  if (pathname === "/ingest") {
+    allowAnyOrigin(res);
+    if (req.method === "OPTIONS") return end(res, 204);
+    if (req.method === "POST") return ingest(store, req, res, url);
+    return sendJson(res, 405, { error: "method not allowed" });
+  }
+
+  if (pathname === "/logs" && req.method === "GET") return readLogs(store, res, url, maxWaitMs);
+  if (pathname === "/logs" && req.method === "DELETE") return sendJson(res, 200, store.clear());
+  if (pathname === "/events" && req.method === "GET") return events(store, req, res);
+  if (pathname === "/health" && req.method === "GET") {
+    return sendJson(res, 200, {
+      ok: true,
+      name: pkg.name,
+      version: pkg.version,
+      cursor: store.cursor,
+      size: store.size,
+    });
+  }
+  if (STATIC[pathname] && req.method === "GET") {
+    const [file, type] = STATIC[pathname];
+    const body = await readFile(new URL(file, PUBLIC_DIR));
+    res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache" });
+    return res.end(body);
+  }
+  sendJson(res, 404, { error: "not found" });
+}
+
+/**
+ * @param {Store} store
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ * @param {URL} url
+ */
+async function ingest(store, req, res, url) {
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    return sendJson(res, 413, { error: errorMessage(err) });
+  }
+  const isJson = (req.headers["content-type"] ?? "").includes("json");
+  const querySource = url.searchParams.get("source") ?? undefined;
+
+  let batch;
+  if (isJson) {
+    try {
+      batch = toBatch(JSON.parse(body));
+    } catch (err) {
+      return sendJson(res, 400, { error: `invalid body: ${errorMessage(err)}` });
+    }
+  } else {
+    // Plain text: `curl -d "something happened" host/ingest?source=api&level=warn`
+    batch = {
+      source: querySource,
+      entries: [{ text: body, level: url.searchParams.get("level") ?? undefined }],
+    };
+  }
+
+  const source = batch.source ?? querySource;
+  let accepted = 0;
+  for (const item of batch.entries) {
+    if (typeof item !== "string" && (!item || typeof item !== "object")) continue;
+    const entry = /** @type {Record<string, unknown>} */ (
+      typeof item === "string" ? { text: item } : item
+    );
+    store.add({
+      level: entry.level,
+      text: entry.message ?? entry.msg ?? entry.text ?? joinArgs(entry.args),
+      source: entry.source ?? source,
+      ts: entry.ts ?? entry.time ?? entry.timestamp,
+      meta: entry.meta,
+    });
+    accepted++;
+  }
+  sendJson(res, 200, { accepted, cursor: store.cursor });
+}
+
+/**
+ * Console-style call arguments, joined the way a terminal would show them:
+ * strings as-is, error-like objects by their stack, everything else as JSON.
+ * Lets a logger wrapper forward `args` without formatting on the client.
+ */
+/** @param {unknown} args @returns {string | undefined} */
+function joinArgs(args) {
+  if (!Array.isArray(args)) return undefined;
+  return args
+    .map((arg) => {
+      if (typeof arg === "string") return arg;
+      if (arg && typeof arg === "object" && typeof arg.stack === "string") return arg.stack;
+      return safeStringify(arg);
+    })
+    .join(" ");
+}
+
+/** @param {any} parsed @returns {{source?: unknown, entries: unknown[]}} */
+function toBatch(parsed) {
+  if (Array.isArray(parsed)) return { entries: parsed };
+  if (parsed && typeof parsed === "object") {
+    if (Array.isArray(parsed.entries)) return { source: parsed.source, entries: parsed.entries };
+    return { source: parsed.source, entries: [parsed] };
+  }
+  throw new Error("expected {source, entries: [...]}");
+}
+
+/**
+ * @param {Store} store
+ * @param {http.ServerResponse} res
+ * @param {URL} url
+ * @param {number} maxWaitMs
+ */
+async function readLogs(store, res, url, maxWaitMs) {
+  let filter;
+  try {
+    filter = parseFilter(Object.fromEntries(url.searchParams));
+  } catch (err) {
+    if (err instanceof FilterError) return sendJson(res, 400, { error: err.message });
+    throw err;
+  }
+  const wait = Math.min(Number(url.searchParams.get("wait")) || 0, maxWaitMs);
+  let entries = store.query(filter);
+  if (entries.length === 0 && wait > 0) entries = await store.wait(filter, wait);
+  sendJson(res, 200, {
+    cursor: store.cursor,
+    count: entries.length,
+    timed_out: entries.length === 0 && wait > 0,
+    entries,
+  });
+}
+
+/**
+ * @param {Store} store
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ */
+function events(store, req, res) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  /** @type {import("./store.js").Subscriber} */
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  for (const entry of store.query(parseFilter({ limit: SSE_REPLAY }))) send("entry", entry);
+  const unsubscribe = store.subscribe(send);
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), 25_000);
+  heartbeat.unref();
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
+}
+
+/** @param {http.IncomingMessage} req @returns {Promise<string>} */
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    /** @type {Buffer[]} */
+    const chunks = [];
+    let size = 0;
+    req.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error(`body exceeds ${MAX_BODY_BYTES} bytes`));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/** @param {http.Server} server @param {number} port @param {string} host @returns {Promise<void>} */
+function listen(server, port, host) {
+  return new Promise((resolve, reject) => {
+    /** @param {Error} err */
+    const onError = (err) => {
+      server.off("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
+  });
+}
+
+/** @param {string} host @returns {string} */
+function urlHost(host) {
+  return host === "0.0.0.0" || host === "::" ? "localhost" : host;
+}
+
+/** @param {http.ServerResponse} res */
+function allowAnyOrigin(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
+/** @param {http.ServerResponse} res @param {number} status @param {unknown} payload */
+function sendJson(res, status, payload) {
+  res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(payload));
+}
+
+/** @param {http.ServerResponse} res @param {number} status */
+function end(res, status) {
+  res.writeHead(status);
+  res.end();
+}

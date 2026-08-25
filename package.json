@@ -1,36 +1,56 @@
 {
-  "name": "local-log",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "dev": "nodemon app.js",
-    "swagger": "nodemon swagger.js",
-    "start": "node app.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
-    "format:check": "prettier --check ."
+  "name": "tiny-log-mcp",
+  "version": "0.1.0",
+  "description": "Ephemeral local log collector with an MCP server, so coding agents can read what your app printed — browser, device, or backend — with high signal-to-noise filtering.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tiny-log-mcp": "bin/tiny-log-mcp.js"
   },
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "body-parser": "^2.2.1",
-    "cors": "^2.8.5",
-    "express": "^5.2.1",
-    "socket.io": "^4.8.1"
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "public"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node bin/tiny-log-mcp.js serve",
+    "dev": "node --watch bin/tiny-log-mcp.js serve",
+    "mcp": "node bin/tiny-log-mcp.js",
+    "test": "node --test",
+    "typecheck": "tsc",
+    "lint": "biome check .",
+    "format": "biome check --write ."
+  },
+  "keywords": [
+    "mcp",
+    "logs",
+    "logging",
+    "claude",
+    "agent",
+    "devtools",
+    "console"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seanbecker15/tiny-log-mcp.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
-    "eslint": "^9.39.1",
-    "eslint-config-google": "^0.14.0",
-    "eslint-config-prettier": "^10.1.2",
-    "nodemon": "^3.1.10",
-    "prettier": "3.8.4",
-    "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.1"
+    "@biomejs/biome": "2.5.10",
+    "@types/node": "^24.13.3",
+    "typescript": "^7.0.2"
   },
-  "nodemonConfig": {
-    "ignore": [
-      "api-docs.json"
-    ]
+  "packageManager": "pnpm@11.23.0",
+  "homepage": "https://github.com/seanbecker15/tiny-log-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/seanbecker15/tiny-log-mcp/issues"
   }
 }
