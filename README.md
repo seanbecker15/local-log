@@ -114,8 +114,10 @@ anything can always `POST /ingest`):
    **native**/**none** inject `client.js` (DevTools one-liner with no code change, or a dev-gated
    tag in source), which forwards `console.*` and uncaught errors.
 
-**A phone or another machine** — bind to all interfaces: `listen` with `host: "0.0.0.0"` (or
-`TINY_LOG_HOST=0.0.0.0`). The tool prints the LAN addresses to use.
+**Another device on the same network (opt-in)** — keep the default local-only connection unless
+the user explicitly requests device testing. For that case, use `listen` with a LAN-reachable host
+(for example `host: "0.0.0.0"`, or `TINY_LOG_HOST=0.0.0.0`). The tool prints the LAN addresses to
+use; return to the default when the test is over.
 
 **Across sessions** — the instructions tell the agent to check project memory and the project's
 agent docs (`AGENTS.md`/`CLAUDE.md`) for a recorded setup before doing any of this, and to record

@@ -10,6 +10,28 @@ Ephemeral local log collector + MCP server. Zero runtime dependencies, Node ≥ 
 - `pnpm lint` / `pnpm format` — Biome (lint + format). CI runs lint, typecheck and tests on Node 22/24/26.
 - `pnpm start` — HTTP listener + web UI at http://127.0.0.1:7710 (`pnpm dev` restarts on change).
 
+## CI, versions and releases
+
+- `.github/workflows/ci.yml` runs on pull requests and pushes to `main`. It installs with
+  `pnpm install --frozen-lockfile`, then runs lint, typecheck and the full test suite on every
+  supported Node line (22, 24 and 26). Run the same three checks before pushing.
+- Use SemVer. For this pre-1.0 package, use a minor bump for substantial user-facing features or
+  compatibility changes and a patch bump for fixes. Never reuse or move a version tag that has
+  been pushed.
+- The release convention is a version-only commit named `X.Y.Z` and a signed `vX.Y.Z` tag, with
+  the tag and `package.json` version matching exactly. `pnpm version patch|minor|major` is the
+  documented release path when starting from a clean tree; follow the existing commit/tag history.
+- **Pushing a `v*` tag publishes to npm.** `.github/workflows/release.yml` is triggered by the tag,
+  repeats install/lint/typecheck/test, verifies the tag against `package.json`, publishes publicly
+  through npm trusted publishing (OIDC, with provenance), and creates the GitHub release. Do not run
+  `npm publish` manually and do not describe npm publication as a separate action after a release
+  tag is pushed.
+- A plain branch push does not publish. A release push should use `git push --follow-tags` (or push
+  `main` and the intended tag explicitly), then monitor the Release workflow to completion and
+  verify the npm version and GitHub release. Report a failed or partial release precisely before
+  retrying; never paper over it with a new tag or a manual publish.
+- Keep GitHub Actions pinned to full commit SHAs and preserve least-privilege workflow permissions.
+
 ## Layout
 
 - `bin/tiny-log-mcp.js` — CLI: `mcp` (default), `serve`, `pipe`, `tail`.

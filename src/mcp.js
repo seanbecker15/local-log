@@ -24,6 +24,8 @@ export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under devel
 
 Whenever you call \`listen\`, surface its Web UI URL prominently to the user. Do this even when you are also starting a Monitor or terminal watch: the UI lets the human inspect the shared logs and see exactly what monitoring agents receive.
 
+Keep the listener on its default loopback address for normal development. Only choose a LAN-reachable interface when the user explicitly says they are testing from another device on the same trusted network.
+
 A backend or terminal process needs no setup: run it as \`<dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api\`. The guided wiring below is for web apps (other ecosystems: POST /ingest — contributions welcome).
 
 Wiring a web app, once per project — first check project memory and the project's agent docs (AGENTS.md/CLAUDE.md) for a saved tiny-log setup and reuse it. Otherwise:
@@ -107,8 +109,9 @@ export function createTools({ store, defaults = {} }) {
       name: "listen",
       description:
         "Start (or report) the local log listener: returns its URL, the current cursor, and the " +
-        "stream address to watch with Monitor. Call this first. Use host 0.0.0.0 to accept logs " +
-        "from a phone or another machine. For how to wire the app, call hint.",
+        "stream address to watch with Monitor. Call this first and leave host unset for normal " +
+        "local development. Change the interface only for an explicit same-network device test. " +
+        "For how to wire the app, call hint.",
       inputSchema: {
         type: "object",
         properties: {
@@ -120,7 +123,7 @@ export function createTools({ store, defaults = {} }) {
           },
           host: {
             type: "string",
-            description: `Interface to bind. Default ${DEFAULT_HOST} (this machine only).`,
+            description: `Interface to bind. Omit for the recommended local-only default (${DEFAULT_HOST}); change only when the user explicitly requests same-network device testing.`,
           },
         },
         additionalProperties: false,
@@ -452,7 +455,7 @@ function describeListener({ url, host, port }, cursor) {
     }
   } else {
     lines.push(
-      'Bound to this machine only. Call listen with host="0.0.0.0" to accept logs from a phone or another machine.',
+      "Using the recommended local-only connection. Keep it unless the user explicitly asks to test from another device on the same trusted network.",
     );
   }
   lines.push(

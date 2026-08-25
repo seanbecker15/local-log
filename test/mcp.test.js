@@ -51,6 +51,8 @@ test("initialize advertises tools and instructions", async () => {
   assert.match(result.instructions, /comfortable shipping/);
   assert.match(result.instructions, /pipe --source api/);
   assert.match(result.instructions, /surface its Web UI URL prominently/);
+  assert.match(result.instructions, /default loopback address/);
+  assert.doesNotMatch(result.instructions, /0\.0\.0\.0/);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
   assert.deepEqual((await request("ping")).result, {});
 });
@@ -70,6 +72,9 @@ test("tools/list exposes the five tools with schemas and annotations", async () 
     assert.equal(typeof tool.annotations.idempotentHint, "boolean");
     assert.equal(tool.annotations.openWorldHint, false);
   }
+  const listenTool = result.tools.find((tool) => tool.name === "listen");
+  assert.match(listenTool.description, /leave host unset/);
+  assert.doesNotMatch(listenTool.description, /0\.0\.0\.0/);
   assert.equal(
     result.tools.find((tool) => tool.name === "read_logs").annotations.readOnlyHint,
     true,
@@ -106,6 +111,8 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   assert.match(listen.content[0].text, /stop Monitor early with TaskStop/);
   assert.match(listen.content[0].text, /surface this link to the user now/);
   assert.match(listen.content[0].text, /\/activity/);
+  assert.match(listen.content[0].text, /recommended local-only connection/);
+  assert.doesNotMatch(listen.content[0].text, /0\.0\.0\.0/);
   assert.doesNotMatch(listen.content[0].text, /tap\(console/);
   assert.ok(listen.content[0].text.split("\n").length < 14);
 
