@@ -1,6 +1,6 @@
 {
   "name": "tiny-log-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Ephemeral local log collector with an MCP server, so coding agents can read what your app printed — browser, device, or backend — with high signal-to-noise filtering.",
   "license": "MIT",
   "type": "module",
