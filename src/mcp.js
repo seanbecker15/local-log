@@ -15,29 +15,18 @@ const MAX_SETTLE_MS = 30_000;
 /** @typedef {import("./server.js").Listener} Listener */
 /** @typedef {{port?: number, host?: string}} BindOptions */
 /** @typedef {{name: string, description: string, inputSchema: object, handler: (args: Record<string, any>) => Promise<string>}} Tool */
-/**
- * Shared per-connection state: whether the client can show the user a dialog
- * (MCP elicitation), and the outbound-request function once the transport is up.
- * @typedef {{elicitation?: boolean, request?: import("./jsonrpc.js").Rpc["request"]}} Session
- */
 
-export const GUIDES = [
-  "logger-methods",
-  "transport",
-  "console",
-  "stdout",
-  "other-language",
-  "http",
-];
+export const LOG_IMPLEMENTATIONS = ["wrapper", "native", "none"];
 
-export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under development (browser, phone/device, backend process) into a buffer you can read or watch. Reach for it whenever you need to see what the app printed instead of asking the user to paste console output.
+export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under development into a buffer you can read or watch. Reach for it whenever you need to see what the app printed instead of asking the user to paste console output.
 
-Setup, once per project:
-1. Check your project memory and the project's agent docs (AGENTS.md/CLAUDE.md) for a saved tiny-log setup from an earlier session. If one exists, reuse it: call \`listen\` and skip straight to verifying. If it is recorded as having failed, present the remaining options to the user instead.
-2. Otherwise call \`listen\` for the URL and the stream address, then \`hint\` for the facts to gather; answer them from the codebase and call hint again for the applicable options. When the client supports it, hint puts the choice directly in front of the user as a dialog and returns only what they picked — honor it. When it returns a menu instead, present the options yourself with the concrete paths you found and let the user pick — their app knowledge beats inference. No user, or one obvious fit: take the least invasive.
-3. Find the app's logger (a shared logger module or class, or plain console.*) and what the dev command prints. If the code already logs what you need, capture those calls — wrapping the logger's methods captures them even when its level is off or flag-controlled — before adding any log calls of your own. If you must add some, tag them with a unique marker and remove every tagged line when done; the dev-gated hook itself is worth keeping committed, it is what makes the next session instant.
-4. Hook it by what the code logs THROUGH, not where it runs — a web app with its own logger wants logger-methods (the tap runs in the page), while console/client.js covers plain console.* and uncaught errors; they compose. Prefer hooks that need no source change (stdout pipe, DevTools injection). Call through to the original, dev-gate any source change, never let delivery throw.
-5. Verify with one test log and read_logs. Then save the setup — the facts you passed to hint, the approach and where the hook lives, the filters with good signal, and how smoothly it went — to the project's agent docs if the project keeps them (teammates' agents benefit), else to your own project memory.
+A backend or terminal process needs no setup: run it as \`<dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api\`. The guided wiring below is for web apps (other ecosystems: POST /ingest — contributions welcome).
+
+Wiring a web app, once per project — first check project memory and the project's agent docs (AGENTS.md/CLAUDE.md) for a saved tiny-log setup and reuse it. Otherwise:
+1. If the app has a log implementation (a wrapper around logging), use it: insert logs through it at levels the user would be comfortable shipping — prefixes are fine, dev-gate anything temporary.
+2. If that implementation is level-gated (config/env/feature flags), adjust the level locally, dev-gated. Don't fight the gate.
+3. If there is no log implementation, log with console.*.
+4. Call \`listen\`, then \`hint\` with logs=wrapper|native|none for the exact wiring recipe. Verify with one test log and read_logs, then save the setup (logs, hook location, filters) to the project's agent docs or your project memory — the next session skips all of this.
 
 Reading — pick by how long you are waiting:
 - read_logs: what is there now. Pass the last cursor as \`after\`; filter tightly (level_min, source, include, exclude).
@@ -87,9 +76,9 @@ const OUTPUT_PROPERTIES = {
 /**
  * Builds the MCP tool set over a store and its HTTP listener.
  *
- * @param {{store: Store, defaults?: BindOptions, session?: Session}} deps
+ * @param {{store: Store, defaults?: BindOptions}} deps
  */
-export function createTools({ store, defaults = {}, session = {} }) {
+export function createTools({ store, defaults = {} }) {
   /** @type {Listener | null} */
   let listener = null;
 
@@ -139,73 +128,37 @@ export function createTools({ store, defaults = {}, session = {} }) {
     {
       name: "hint",
       description:
-        "How to wire the app's logs to the listener. Investigate the codebase, pass what you " +
-        "found (logger, logger_package, level_gated, runs_in, …), and get the applicable options " +
-        "with trade-offs — present them to the user and let them pick when they differ " +
-        "materially; their app knowledge beats inference. Without arguments: the questions to " +
-        "answer. interface=<name> skips straight to one snippet (logger-methods, transport, " +
-        "console, stdout, other-language, http, all).",
+        "The wiring recipe for a web app: pass logs (wrapper: the app has its own logger " +
+        "module/class | native: it logs straight with console.* | none: it barely logs) and get " +
+        "the exact steps and snippets. Remember: use an existing wrapper at shippable levels; if " +
+        "it is level-gated, adjust the level locally (dev-gated) rather than fighting the gate. " +
+        "Backend/terminal processes need no hint — pipe their stdout.",
       inputSchema: {
         type: "object",
         properties: {
-          language: {
+          logs: {
             type: "string",
+            enum: LOG_IMPLEMENTATIONS,
             description:
-              'The app\'s language: "js"/"ts", or the language name if not JavaScript (python, go, …).',
-          },
-          runs_in: {
-            type: "string",
-            enum: ["browser", "node", "react-native", "electron", "other"],
-            description: "Where the code you want logs from runs.",
-          },
-          logger: {
-            type: "string",
-            description:
-              "The shared logger module or class the code actually calls — grep for `logger.`, " +
-              "`createLogger`, `getLogger`, `class Logger` before answering, do not guess. " +
-              '"console" if it logs with console.*; "none" if neither.',
-          },
-          logger_package: {
-            type: "string",
-            description:
-              "The underlying logging package, if identifiable from package.json or imports: " +
-              "pino, winston, bunyan, consola, tslog, log4js, loglevel, debug, roarr, or a custom/unknown name.",
-          },
-          level_gated: {
-            type: "boolean",
-            description:
-              "true if the effective log level comes from config, env, or feature flags you cannot easily change locally (calls below it never reach the logger's outputs).",
-          },
-          emits_ndjson: {
-            type: "boolean",
-            description:
-              "true if the dev command prints JSON log lines (pino/bunyan style) to stdout.",
-          },
-          interface: {
-            type: "string",
-            enum: [...GUIDES, "all"],
-            description: "Skip the facts and fetch one interface's snippet directly.",
+              "wrapper: a shared logger module/class exists; native: plain console.*; none: the code barely logs.",
           },
         },
         additionalProperties: false,
       },
-      async handler({ interface: name, ...facts }) {
+      async handler({ logs }) {
         const current = await ensureListener();
-        if (name === "all")
-          return GUIDES.map((g) => wiringGuide(current.url, g).join("\n")).join("\n\n");
-        if (name) return wiringGuide(current.url, name).join("\n");
-        if (Object.values(facts).some((value) => value !== undefined && value !== "")) {
-          const options = buildOptions(facts);
-          // The http catch-all is always present; a dialog is only worth the
-          // interruption when there are at least two real alternatives.
-          const realOptions = options.filter((option) => option.name !== "http").length;
-          if (session.elicitation && session.request && realOptions >= 2) {
-            const outcome = await elicitChoice(session.request, current.url, options);
-            if (outcome) return outcome;
-          }
-          return renderMenu(options).join("\n");
+        if (!logs || !LOG_IMPLEMENTATIONS.includes(logs)) {
+          const ask = [
+            "Tell me the web app's log implementation and I'll return the exact recipe. Grep the codebase before answering (`logger.`, `createLogger`, `getLogger`, `class Logger`) — do not guess:",
+            "  logs=wrapper  a shared logger module/class exists (even if it wraps console or its level is flag-controlled — that still counts as wrapper)",
+            "  logs=native   the code logs straight with console.*, no wrapper anywhere",
+            "  logs=none     the code barely logs at all",
+            `Not a web app? A backend/terminal process needs no recipe: <dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api --url ${current.url}. Anything else can POST ${current.url}/ingest.`,
+          ];
+          if (logs) ask.unshift(`"${logs}" is not a log implementation.`);
+          return ask.join("\n");
         }
-        return wiringIndex().join("\n");
+        return recipe(current.url, logs).join("\n");
       },
     },
     {
@@ -311,21 +264,17 @@ export function createTools({ store, defaults = {}, session = {} }) {
 /**
  * JSON-RPC method handlers implementing the MCP tools-only surface.
  * @param {ReturnType<typeof createTools>} toolset
- * @param {Session} [session]
  * @returns {Record<string, (params: any) => Promise<unknown>>}
  */
-export function createHandlers(toolset, session = {}) {
+export function createHandlers(toolset) {
   const byName = new Map(toolset.tools.map((tool) => [tool.name, tool]));
   return {
-    initialize: async (params) => {
-      session.elicitation = Boolean(params?.capabilities?.elicitation);
-      return {
-        protocolVersion: params.protocolVersion ?? "2025-06-18",
-        capabilities: { tools: {} },
-        serverInfo: { name: pkg.name, version: pkg.version },
-        instructions: INSTRUCTIONS,
-      };
-    },
+    initialize: async (params) => ({
+      protocolVersion: params.protocolVersion ?? "2025-06-18",
+      capabilities: { tools: {} },
+      serverInfo: { name: pkg.name, version: pkg.version },
+      instructions: INSTRUCTIONS,
+    }),
     "notifications/initialized": async () => {},
     ping: async () => ({}),
     "tools/list": async () => ({
@@ -353,9 +302,7 @@ export function createHandlers(toolset, session = {}) {
  * @param {{store: Store, defaults?: BindOptions, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream}} options
  */
 export async function runMcp({ store, defaults, input, output }) {
-  /** @type {Session} */
-  const session = {};
-  const toolset = createTools({ store, defaults, session });
+  const toolset = createTools({ store, defaults });
   // Bind eagerly so an app wired to a pinned port can start sending before the
   // agent calls `listen`; the tool still reports the actual port.
   try {
@@ -363,14 +310,7 @@ export async function runMcp({ store, defaults, input, output }) {
   } catch (err) {
     process.stderr.write(`tiny-log-mcp: listener not started (${errorMessage(err)})\n`);
   }
-  await serveStdio({
-    input,
-    output,
-    handlers: (rpc) => {
-      session.request = rpc.request;
-      return createHandlers(toolset, session);
-    },
-  });
+  await serveStdio({ input, output, handlers: createHandlers(toolset) });
   await toolset.close();
 }
 
@@ -446,7 +386,7 @@ function describeListener({ url, host, port }, cursor) {
   }
   lines.push(
     "",
-    "Wiring: call hint (or hint interface=<name>) for how to connect the app's logs.",
+    "Wiring a web app: call hint — it asks which log implementation the app has and returns the recipe. A terminal process just pipes: <dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api.",
     "Read now: read_logs.  Wait for one thing: await_logs (until=<regex> returns everything through a terminal line).",
     "Watch while the user drives (minutes, hands-free): each matching entry is pushed to you as it happens —",
     `  Monitor({ ws: { url: "${ws}?after=${cursor}&include=<regex>&exclude=<regex>&level_min=<level>&until=<regex>" }, description: "<what you are watching for>", persistent: true })`,
@@ -457,286 +397,76 @@ function describeListener({ url, host, port }, cursor) {
   return lines.join("\n");
 }
 
-/** The short form: what exists, and how to ask for one snippet. */
-function wiringIndex() {
-  return [
-    "Answer these from the codebase (grep — don't guess), then call hint again with what you found for the applicable options to put in front of the user:",
-    '  logger          the shared logger module/class the code calls (grep for logger., createLogger, getLogger, class Logger); "console" or "none" if there is not one',
-    "  logger_package  the underlying package if identifiable: pino, winston, bunyan, consola, tslog, log4js, loglevel, debug, roarr, or custom",
-    "  level_gated     true if the effective level comes from config/env/feature flags you can't change locally",
-    "  runs_in         browser | node | react-native | electron | other",
-    "  emits_ndjson    true if the dev command prints JSON log lines to stdout",
-    '  language        "js"/"ts", or the language if not JavaScript',
-    "",
-    "For orientation — the interfaces the options draw from (interface=<name> fetches one directly). What applies depends on what the code logs THROUGH, not where it runs:",
-    "  logger-methods  wrap a logger object/class's level methods (captures calls even when the logger's level is off or flag-controlled)",
-    "  transport       one line on a logger's transport/stream/reporter hook (pino, winston, bunyan, consola, …)",
-    "  console         client.js for a page's plain console.* + uncaught errors; composes with logger-methods when a page has both",
-    "  stdout          pipe the dev command (no code change)",
-    "  other-language  Python, Go, .NET, Java, Ruby, Rust → handler/sink shape",
-    "  http            anything else → POST /ingest",
-    "Before adding log calls of your own, check whether the code already logs what you need: logger-methods captures those calls even when the logger's level would drop them. If you must add some, tag them with a unique marker (e.g. [TL-123]), filter with include, and remove every tagged line when done.",
-    "Rules: call through to the original, dev-gate any source change, never let delivery throw. Verify with one test log, then start watching. Once verified, record the setup in the project's agent docs or your project memory so the next session skips this.",
-  ];
-}
-
 /**
- * One interface's snippet, with the real URL filled in.
+ * The wiring recipe for a web app with the given log implementation: make the
+ * logs flow, get them to the listener, verify. Opinionated on purpose — the
+ * rules live in the instructions; this fills in the snippets. Web-only for
+ * now; recipes for more ecosystems are welcome contributions.
+ *
  * @param {string} url
- * @param {string} name
+ * @param {string} logs
  * @returns {string[]}
  */
-function wiringGuide(url, name) {
-  const ingest = `${url}/ingest`;
-  const send = `const send = (source, entries) => fetch("${ingest}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, entries }) }).catch(() => {});`;
-  const inject = `(s => { s.src = "${url}/client.js"; s.dataset.source = "web"; document.head.append(s); })(document.createElement("script"))`;
-  switch (name) {
-    case "stdout":
-      return [
-        "stdout — the process prints to stdout/stderr (any language). No code change:",
-        `  <dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api --url ${url}`,
-        "  pino/bunyan/winston NDJSON keeps level, time and fields; plain text gets ANSI stripped and a level guessed; stack frames are merged.",
-      ];
-    case "console":
-      return [
-        `console — a web page logging with plain console.*: load ${url}/client.js in the page. It wraps console.* and also catches window.onerror and unhandledrejection, batches, and no-ops when the listener is down.`,
-        "  It only sees console calls. If the page routes logs through its own logger object/class, wrap that too (hint interface=logger-methods) — the tap runs in the page the same way, and both post to the same listener.",
-        "  The page keeps its own origin: the client POSTs cross-origin to the listener. Never proxy or re-host the page for this.",
-        "  No code change (lost on reload — re-run after each load). Paste into the DevTools console, or run it with a browser-automation tool if you have one:",
-        `    ${inject}`,
-        `  Bookmarklet for the user:  javascript:${inject}`,
-        "  In source (survives reloads; dev-gate it, remove when done). Put one tag where the app's HTML lives:",
-        `    <script src="${url}/client.js" data-source="web"></script>`,
-        '    Vite: index.html at the project root · Next.js: app/layout.tsx via <Script strategy="beforeInteractive"> or pages/_document · CRA/webpack: public/index.html',
-        "  If the template is not in the repo (copied from a package, generated by a plugin), do not hunt for it — inject from the entry module instead:",
-        `    if (process.env.NODE_ENV !== "production") { ${inject}; }`,
-      ];
-    case "logger-methods":
-      return [
-        "logger-methods — the app logs through a logger object or class with level methods (custom Logger class, console, loglevel). Wrap each method; the server joins raw args. Works wherever the code runs — a browser page included: paste the tap in the DevTools console after the app loads, or run it early in the entry module (dev-gated).",
-        "  This captures every call the app makes, including ones the logger would drop because its level is off or set by config/feature flags you cannot change: the wrapper runs before the logger's own level check. Prefer it over adding console.log calls when the code already logs what you need.",
-        `  ${send}`,
-        "  const fmt = (a) => (a instanceof Error ? (a.stack ?? String(a)) : a);",
-        "  function tap(logger, source) {",
-        '    for (const level of ["trace", "debug", "log", "info", "warn", "error", "fatal"]) {',
-        "      const original = logger[level];",
-        '      if (typeof original !== "function") continue;',
-        "      logger[level] = function (...args) {",
-        "        send(source, [{ level, args: args.map(fmt) }]);",
-        "        return original.apply(this, args);",
-        "      };",
-        "    }",
-        "  }",
-        '  tap(console, "api");   // or tap(Logger.prototype, "web") for a class (once, before instances are created), tap(loglevel, "web")',
-        "  In a page, add client.js as well (hint interface=console) so uncaught errors and rejections are captured too.",
-      ];
-    case "transport": {
-      const rows = Object.entries(TRANSPORT_LINES).map(
-        ([pkg, line]) => `  ${pkg}:${" ".repeat(Math.max(1, 9 - pkg.length))}${line}`,
-      );
-      return [
-        "transport — a logger with a transport / stream / reporter hook. One line; records are forwarded as-is (level + message + fields preserved):",
-        `  ${send}`,
-        ...rows,
-        "  If the logger's level is set by config or flags you cannot change, set it to trace for the hook or use logger-methods instead.",
-      ];
-    }
-    case "other-language":
-      return [
-        "other-language — prefer stdout (pipe the process); otherwise implement the one-method handler/sink shape and POST:",
-        "  Python:   class Tap(logging.Handler):",
-        `                def emit(self, r): post({"source": "api", "entries": [{"level": r.levelname, "message": self.format(r)}]})   # urllib/requests to ${ingest}, swallow errors`,
-        "            logging.getLogger().addHandler(Tap())",
-        "  Go: slog.Handler or an io.Writer that POSTs lines.  .NET: Serilog sink / ILoggerProvider.  Java: logback appender.  Ruby: Logger logdev.  Rust: tracing Layer.",
-      ];
-    case "http":
-      return [
-        "http — anything that can make an HTTP request:",
-        `  POST ${ingest}  {"source":"api","entries":[{"level":"error","message":"…","ts":"2026-01-01T00:00:00Z","meta":{"reqId":"r1"}}]}`,
-        `  curl -d "plain text" "${ingest}?source=api&level=warn"`,
-        "  Accepted: a batch, a bare array, one object, or plain text. Each entry: level (any logger's names or numbers are normalized), message | msg | text | args[], ts | time, meta, source.",
-      ];
-    default:
-      return [`Unknown guide "${name}". One of: ${GUIDES.join(", ")}, all.`];
-  }
-}
+function recipe(url, logs) {
+  const lines = ["Wire it in two steps, then verify."];
 
-/** One-line hook per known transport-style logger, shared by the guide and buildOptions(). */
-const TRANSPORT_LINES = {
-  pino: 'pino({ level: "trace" }, { write: (line) => send("api", [JSON.parse(line)]) })',
-  winston:
-    'logger.add(new winston.transports.Stream({ format: winston.format.json(), stream: { write: (line) => send("api", [JSON.parse(line)]) } }))',
-  bunyan:
-    'streams: [{ level: "trace", type: "raw", stream: { write: (rec) => send("api", [rec]) } }]',
-  consola: 'consola.addReporter({ log: (r) => send("api", [{ level: r.type, args: r.args }]) })',
-  tslog:
-    'logger.attachTransport((o) => send("api", [{ level: o._meta.logLevelName, args: Object.keys(o).filter((k) => k !== "_meta").map((k) => o[k]) }]))',
-  log4js:
-    'appender { type: { configure: () => (e) => send("api", [{ level: e.level.levelStr, args: e.data }]) } }',
-  debug: 'debug.log = (...args) => send("api", [{ level: "debug", args }])',
-  roarr: 'globalThis.ROARR.write = (line) => send("api", [JSON.parse(line)])',
-};
-
-const JS_NAMES = new Set(["", "js", "ts", "javascript", "typescript", "node", "jsx", "tsx"]);
-
-const OTHER_CHOICE = "Other — I'll describe the hook in chat";
-const VERIFY_TAIL =
-  "Then verify the pick: emit one test log, read it back with read_logs, and start watching. Once verified, save the chosen setup (facts, approach, hook location, filters) to the project's agent docs or your project memory — the next session skips this.";
-
-/**
- * The applicable wiring options for these facts, roughly ordered by fit — a
- * filter, not a judge. When the client supports elicitation the user picks in
- * a dialog; otherwise the agent presents the rendered menu and the user picks
- * in chat. Deciding is cheap for the human and unreliable for the agent.
- *
- * @typedef {{name: string, label: string, tradeoff: string}} WiringOption
- * @param {{language?: string, runs_in?: string, logger?: string, logger_package?: string, level_gated?: boolean, emits_ndjson?: boolean}} facts
- * @returns {WiringOption[]}
- */
-function buildOptions(facts) {
-  const language = String(facts.language ?? "").toLowerCase();
-  const runsIn = String(facts.runs_in ?? "");
-  const logger = String(facts.logger ?? "").trim();
-  const pkg = String(facts.logger_package ?? "").toLowerCase();
-  const gated = facts.level_gated === true;
-  const ndjson = facts.emits_ndjson === true;
-  const inBrowser = runsIn === "browser";
-  const hasLogger = logger !== "" && !["console", "none"].includes(logger.toLowerCase());
-  // Options that capture downstream of a gated logger (console.*, stdout) never
-  // see the calls its level check drops. That blind spot must be on the label.
-  const gatedBlindSpot = hasLogger && gated ? `; will MISS ${logger}'s level-gated calls` : "";
-
-  /** @type {WiringOption[]} */
-  const options = [];
-  /** @param {string} name @param {string} label @param {string} tradeoff */
-  const add = (name, label, tradeoff) => options.push({ name, label, tradeoff });
-
-  if (!JS_NAMES.has(language)) {
-    add(
-      "other-language",
-      `a ${facts.language} handler/sink`,
-      "one class wired into the logging config; keeps level and message",
+  if (logs === "wrapper") {
+    lines.push(
+      "",
+      "1. Make the logs flow through the app's own logger:",
+      "   Insert logs through the wrapper at levels the user would be comfortable shipping — a recognizable prefix is fine; dev-gate anything temporary.",
+      "   If its level is gated by config/env/feature flags, adjust the level locally (dev-gated). Don't fight the gate.",
+      "   Only if the level truly cannot be changed, wrap the level methods so calls bypass the gate:",
+      ...tapSnippet(url),
     );
-    if (!inBrowser)
-      add(
-        "stdout",
-        "pipe the dev command's stdout",
-        "no code change; captures only what reaches stdout",
-      );
+  } else if (logs === "native") {
+    lines.push(
+      "",
+      "1. Make the logs flow: log with console.* as usual; add what you need at levels the user would keep.",
+    );
   } else {
-    if (hasLogger) {
-      add(
-        "logger-methods",
-        `wrap ${logger}'s level methods`,
-        (gated
-          ? "captures every call even though the level is flag/config-gated (the wrapper runs before the level check); "
-          : "captures the calls the code already makes; ") +
-          "one dev-gated source change, survives reloads",
-      );
-    } else if (runsIn === "react-native") {
-      add("logger-methods", "wrap console with the tap", "React Native has no DOM for client.js");
-    }
-    if (pkg in TRANSPORT_LINES) {
-      add(
-        "transport",
-        `one line on ${pkg}'s transport hook`,
-        "records keep level, message and fields" +
-          (gated ? "; force its level to trace to beat the gate" : ""),
-      );
-    }
-    if (inBrowser) {
-      add(
-        "console",
-        "inject client.js with no code change",
-        `paste in the DevTools console (or via a browser tool); catches console.* and uncaught errors; lost on reload, nothing to clean up${gatedBlindSpot}`,
-      );
-      add(
-        "console",
-        "load client.js from source",
-        `script tag or entry-module injection; survives reloads; dev-gated source change${gatedBlindSpot}`,
-      );
-    } else if (runsIn !== "react-native") {
-      add(
-        "stdout",
-        "pipe the dev command's stdout",
-        "no code change" +
-          (ndjson
-            ? "; the NDJSON keeps level, time and fields"
-            : "; captures only what reaches stdout, plain-text levels are guessed") +
-          gatedBlindSpot,
-      );
-    }
+    lines.push(
+      "",
+      "1. Make the logs flow: the code barely logs — add logs with console.* at levels the user would be comfortable shipping; prefix temporary ones and dev-gate them.",
+    );
   }
-  add("http", "POST /ingest from anything", "raw HTTP; a batch, one object, or plain text");
-  return options;
+
+  lines.push(
+    "",
+    "2. Get them to tiny-log — inject client.js; it forwards console.* and uncaught errors" +
+      (logs === "wrapper" ? " (the wrapper's output arrives once it reaches console):" : ":"),
+    `   no code change (paste in DevTools, lost on reload): (s => { s.src = "${url}/client.js"; s.dataset.source = "web"; document.head.append(s); })(document.createElement("script"))`,
+    `   in source (dev-gated, survives reloads): <script src="${url}/client.js" data-source="web"></script> — Vite: index.html · Next: app/layout · CRA: public/index.html; template not in the repo? run the injection line from the entry module instead.`,
+    ...(logs === "wrapper" ? forwardNote(url) : []),
+  );
+
+  lines.push(
+    "",
+    "3. Verify: emit one test log and read it back with read_logs. Then save the setup (logs, hook location, filters) to the project's agent docs or your project memory — the next session skips this.",
+  );
+  return lines;
 }
 
-/**
- * Today's text menu, for clients without elicitation or a dismissed dialog.
- * @param {WiringOption[]} options @returns {string[]}
- */
-function renderMenu(options) {
-  const rows = options.map(
-    ({ name, label, tradeoff }, i) =>
-      `${i + 1}. ${label} — ${tradeoff} (snippet: hint interface=${name})`,
-  );
+/** The method tap, for a wrapper whose level truly cannot be changed. @param {string} url @returns {string[]} */
+function tapSnippet(url) {
   return [
-    "Applicable ways to wire this app, roughly ordered by fit. If a user is present and these differ materially (a source change versus none), present them with the concrete paths you found and let the user pick. No user, or one obvious fit: take the least invasive.",
-    "",
-    ...rows,
-    `${options.length + 1}. Other — ask the user; they may know a hook you did not find (a logging util, a debug flag).`,
-    "",
-    VERIFY_TAIL,
+    `     const send = (source, entries) => fetch("${url}/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, entries }) }).catch(() => {});`,
+    "     const fmt = (a) => (a instanceof Error ? (a.stack ?? String(a)) : a);",
+    '     for (const level of ["trace", "debug", "log", "info", "warn", "error", "fatal"]) {',
+    "       const original = Logger.prototype[level];",
+    '       if (typeof original !== "function") continue;',
+    "       Logger.prototype[level] = function (...args) {",
+    '         send("app", [{ level, args: args.map(fmt) }]);',
+    "         return original.apply(this, args);",
+    "       };",
+    "     }",
   ];
 }
 
-/**
- * Puts the choice directly in front of the user via MCP elicitation. Returns
- * the tool result for a decided dialog, or null to fall back to the menu
- * (request failed / timed out / feature broke — never block the flow).
- *
- * @param {NonNullable<Session["request"]>} request
- * @param {string} url
- * @param {WiringOption[]} options
- * @returns {Promise<string | null>}
- */
-async function elicitChoice(request, url, options) {
-  const labels = [...options.map((o) => o.label), OTHER_CHOICE];
-  try {
-    const response = await request("elicitation/create", {
-      message: [
-        "How should tiny-log hook into this app's logs?",
-        ...options.map((o, i) => `${i + 1}. ${o.label} — ${o.tradeoff}`),
-      ].join("\n"),
-      requestedSchema: {
-        type: "object",
-        properties: {
-          choice: { type: "string", title: "Integration", enum: labels },
-        },
-        required: ["choice"],
-      },
-    });
-    if (response?.action !== "accept") {
-      return [
-        "The user dismissed the choice dialog — present the options in chat instead and let them pick there.",
-        "",
-        ...renderMenu(options),
-      ].join("\n");
-    }
-    const choice = response.content?.choice;
-    if (choice === OTHER_CHOICE) {
-      return "The user chose Other — ask them in chat which hook they have in mind, wire that, and verify with a test log.";
-    }
-    const picked = options.find((o) => o.label === choice);
-    if (!picked) return null;
-    return [
-      `The user chose: ${picked.label} (${picked.tradeoff}).`,
-      "",
-      ...wiringGuide(url, picked.name),
-      "",
-      VERIFY_TAIL,
-    ].join("\n");
-  } catch {
-    return null;
-  }
+/** For wrappers that never reach console: forward records directly. @param {string} url @returns {string[]} */
+function forwardNote(url) {
+  return [
+    "   If the wrapper's output never reaches console, forward it directly (one dev-gated line where it emits):",
+    `     fetch("${url}/ingest", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "app", entries: [{ level, args }] }) }).catch(() => {})`,
+  ];
 }

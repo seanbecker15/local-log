@@ -19,52 +19,18 @@ export const INTERNAL_ERROR = -32603;
 
 /**
  * Serves newline-delimited JSON-RPC 2.0 over a pair of streams — the MCP stdio
- * transport. `handlers` maps method names to `async (params) => result`; pass a
- * function instead and it receives `rpc` — with `rpc.request` the server can
- * make its own requests to the client (e.g. MCP elicitation) and await the
- * response. Notifications (no `id`) run their handler, if any, and get no reply.
+ * transport. `handlers` maps method names to `async (params) => result`.
+ * Notifications (no `id`) run their handler, if any, and get no reply.
  *
- * @typedef {{request: (method: string, params: unknown, options?: {timeoutMs?: number}) => Promise<any>}} Rpc
  * @param {object} options
  * @param {NodeJS.ReadableStream} [options.input]
  * @param {NodeJS.WritableStream} [options.output]
- * @param {Record<string, (params: any) => Promise<unknown>> | ((rpc: Rpc) => Record<string, (params: any) => Promise<unknown>>)} options.handlers
+ * @param {Record<string, (params: any) => Promise<unknown>>} options.handlers
  * @returns {Promise<void>} resolves when the input stream ends.
  */
 export function serveStdio({ input = process.stdin, output = process.stdout, handlers }) {
   /** @param {unknown} message */
   const write = (message) => output.write(`${JSON.stringify(message)}\n`);
-
-  let nextRequestId = 0;
-  /** @type {Map<string, {resolve: (value: any) => void, reject: (err: Error) => void, timer: NodeJS.Timeout}>} */
-  const pending = new Map();
-  /** @type {Rpc} */
-  const rpc = {
-    request(method, params, { timeoutMs = 600_000 } = {}) {
-      return new Promise((resolve, reject) => {
-        const id = `srv-${++nextRequestId}`;
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error(`${method} timed out`));
-        }, timeoutMs);
-        timer.unref?.();
-        pending.set(id, { resolve, reject, timer });
-        write({ jsonrpc: "2.0", id, method, params });
-      });
-    },
-  };
-  const table = typeof handlers === "function" ? handlers(rpc) : handlers;
-
-  /** Settles one of our own outbound requests. @param {any} message @returns {boolean} */
-  const settle = (message) => {
-    const entry = pending.get(message.id);
-    if (!entry) return false;
-    pending.delete(message.id);
-    clearTimeout(entry.timer);
-    if (message.error) entry.reject(new Error(message.error.message ?? "request failed"));
-    else entry.resolve(message.result);
-    return true;
-  };
 
   /** @param {any} message */
   const dispatch = async (message) => {
@@ -75,12 +41,8 @@ export function serveStdio({ input = process.stdin, output = process.stdout, han
       return write(errorResponse(message?.id ?? null, INVALID_REQUEST, "invalid request"));
     }
     const { id, method, params } = message;
-    if (typeof method !== "string") {
-      if (settle(message)) return;
-      return write(errorResponse(id ?? null, INVALID_REQUEST, "invalid request"));
-    }
     const isNotification = id === undefined;
-    const handler = table[method];
+    const handler = handlers[method];
     if (!handler) {
       if (isNotification) return;
       return write(errorResponse(id, METHOD_NOT_FOUND, `method not found: ${method}`));
@@ -108,14 +70,7 @@ export function serveStdio({ input = process.stdin, output = process.stdout, han
       }
       dispatch(message);
     });
-    lines.on("close", () => {
-      for (const { reject, timer } of pending.values()) {
-        clearTimeout(timer);
-        reject(new Error("connection closed"));
-      }
-      pending.clear();
-      resolve();
-    });
+    lines.on("close", resolve);
   });
 }
 

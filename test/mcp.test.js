@@ -47,8 +47,9 @@ test("initialize advertises tools and instructions", async () => {
   assert.equal(result.serverInfo.name, "tiny-log-mcp");
   assert.match(result.instructions, /await_logs/);
   assert.match(result.instructions, /project memory/);
-  assert.match(result.instructions, /let the user pick/);
-  assert.match(result.instructions, /keeping committed/);
+  assert.match(result.instructions, /Don't fight the gate/);
+  assert.match(result.instructions, /comfortable shipping/);
+  assert.match(result.instructions, /pipe --source api/);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
   assert.deepEqual((await request("ping")).result, {});
 });
@@ -84,61 +85,44 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   assert.doesNotMatch(listen.content[0].text, /tap\(console/);
   assert.ok(listen.content[0].text.split("\n").length < 14);
 
-  const index = await callTool("hint");
-  assert.match(index.content[0].text, /grep — don't guess/);
-  assert.match(index.content[0].text, /level_gated/);
-  assert.match(index.content[0].text, /logs THROUGH, not where it runs/);
-  assert.ok(
-    index.content[0].text.indexOf("logger-methods") < index.content[0].text.indexOf("console "),
-    "logger question comes before the page-specific entry",
-  );
+  // listen routes to hint without leaking values to guess at.
+  assert.doesNotMatch(listen.content[0].text, /wrapper\|native\|none/);
 
-  const consoleGuide = await callTool("hint", { interface: "console" });
-  assert.match(consoleGuide.content[0].text, /client\.js/);
-  assert.match(consoleGuide.content[0].text, /DevTools console/);
-  assert.doesNotMatch(consoleGuide.content[0].text, /pino:/);
-  const methods = await callTool("hint", { interface: "logger-methods" });
-  assert.match(methods.content[0].text, /tap\(console/);
-  assert.match(methods.content[0].text, /level is off/);
-  assert.match(methods.content[0].text, /browser page included/);
-  const everything = await callTool("hint", { interface: "all" });
-  assert.match(everything.content[0].text, /pipe --source/);
-  assert.match(everything.content[0].text, /roarr/);
-  assert.match(everything.content[0].text, /logging\.Handler/);
+  // Bare hint defines the terms, says to grep, and covers non-web with the pipe.
+  const bare = await callTool("hint");
+  assert.match(bare.content[0].text, /Grep the codebase before answering/);
+  assert.match(bare.content[0].text, /logs=wrapper {2}a shared logger module\/class exists/);
+  assert.match(bare.content[0].text, /that still counts as wrapper/);
+  assert.match(bare.content[0].text, /2>&1 \| npx -y tiny-log-mcp pipe/);
 
-  // Facts → options menu: a web app with its own flag-gated logger.
-  const gatedWeb = await callTool("hint", {
-    runs_in: "browser",
-    logger: "AppLogger",
-    level_gated: true,
-  });
-  const menu = gatedWeb.content[0].text;
-  assert.match(menu, /let the user pick/);
-  assert.match(menu, /^1\. wrap AppLogger's level methods/m);
-  assert.match(menu, /flag\/config-gated/);
-  assert.match(menu, /inject client\.js with no code change/);
-  // Both console options carry the blind spot the gate creates.
-  assert.equal(menu.match(/will MISS AppLogger's level-gated calls/g)?.length, 2);
-  assert.match(menu, /load client\.js from source/);
-  assert.match(menu, /Other — ask the user/);
-  assert.match(menu, /agent docs or your project memory/);
-  assert.doesNotMatch(menu, /pipe the dev command/);
+  // The historically wrong input gets the definitions back, not a silent recipe.
+  const wrong = await callTool("hint", { logs: "console" });
+  assert.match(wrong.content[0].text, /^"console" is not a log implementation\./);
+  assert.match(wrong.content[0].text, /logs=native {3}the code logs straight with console/);
+  assert.doesNotMatch(wrong.content[0].text, /Wire it in two steps/);
 
-  // A pino backend: stdout keeps fields, transport offered, nothing browser-shaped.
-  const pinoNode = await callTool("hint", {
-    runs_in: "node",
-    logger: "src/logger.ts",
-    logger_package: "pino",
-    emits_ndjson: true,
-  });
-  assert.match(pinoNode.content[0].text, /pino's transport hook/);
-  assert.match(pinoNode.content[0].text, /NDJSON keeps level, time and fields/);
-  assert.doesNotMatch(pinoNode.content[0].text, /client\.js/);
+  // wrapper: use it at shippable levels, don't fight the gate, tap only as last resort.
+  const wrapper = await callTool("hint", { logs: "wrapper" });
+  const wr = wrapper.content[0].text;
+  assert.match(wr, /comfortable shipping/);
+  assert.match(wr, /adjust the level locally \(dev-gated\)\. Don't fight the gate\./);
+  assert.match(wr, /Only if the level truly cannot be changed/);
+  assert.match(wr, /Logger\.prototype\[level\]/);
+  assert.match(wr, /client\.js/);
+  assert.match(wr, /paste in DevTools/);
+  assert.match(wr, /never reaches console, forward it directly/);
+  assert.match(wr, /save the setup/);
 
-  // Non-JS gets the sink shape plus the pipe.
-  const py = await callTool("hint", { language: "python" });
-  assert.match(py.content[0].text, /python handler\/sink/);
-  assert.match(py.content[0].text, /pipe the dev command/);
+  // native: console.* plus injection — no tap, no forward note.
+  const native = await callTool("hint", { logs: "native" });
+  assert.match(native.content[0].text, /log with console\.\* as usual/);
+  assert.match(native.content[0].text, /client\.js/);
+  assert.doesNotMatch(native.content[0].text, /Logger\.prototype/);
+  assert.doesNotMatch(native.content[0].text, /forward it directly/);
+
+  // none: add shippable logs first.
+  const none = await callTool("hint", { logs: "none" });
+  assert.match(none.content[0].text, /barely logs — add logs with console\.\*/);
 
   const health = await fetch(`${url}/health`).then((r) => r.json());
   assert.equal(health.ok, true);
