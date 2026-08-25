@@ -31,9 +31,11 @@ sub-agents) can watch the same buffer with different filters.
 The agent does this once per project. `hint` is built facts-first: called bare it returns the
 questions to answer from the codebase (which logger does the code call, is its level gated by
 flags, where does it run, …); called with those facts it returns the **applicable options with
-trade-offs**, which the agent presents to you — with the concrete file paths it found — so you
-pick. Your app knowledge beats its inference; "Other" is always on the menu. `hint` with
-`interface: "<name>"` still fetches any snippet directly:
+trade-offs** and puts the pick in front of **you**: in clients that support MCP elicitation
+(Claude Code ≥ 2.1.76) a dialog opens inside the tool call — the agent cannot skip it — and only
+the snippet for your choice comes back. Elsewhere the agent gets the menu and presents it. Your
+app knowledge beats its inference; "Other" is always a choice. `hint` with `interface: "<name>"`
+still fetches any snippet directly:
 
 1. **Find the logger.** Grep for a shared logger module or class (`logger.`, `createLogger`,
    `pino(`, `winston`, `consola`, `log4js`, …) or plain `console.*`, and check what the dev
@@ -184,7 +186,7 @@ committed. If a recorded approach stops working, the agent presents the remainin
 | Tool         | Arguments                                                                  | Purpose                                                                                                     |
 | ------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the URL, the cursor, and the stream address to watch with Monitor. |
-| `hint`       | `logger?`, `logger_package?`, `level_gated?`, `runs_in?`, `emits_ndjson?`, `language?`, `interface?` | Facts in, options out: the applicable ways to wire the app, with trade-offs, for the user to pick from. Bare: the questions. `interface=<name>`: one snippet directly. |
+| `hint`       | `logger?`, `logger_package?`, `level_gated?`, `runs_in?`, `emits_ndjson?`, `language?`, `interface?` | Facts in, options out: the applicable ways to wire the app, with trade-offs. The user picks — via an elicitation dialog where supported, else a menu the agent presents. Bare: the questions. `interface=<name>`: one snippet directly. |
 | `read_logs`  | `after?`, `level_min?`, `include?`, `exclude?`, `source?`, `limit?`, `max_chars?` | Read buffered entries, oldest first, as compact text. Returns a cursor to pass back as `after`.       |
 | `await_logs` | same as `read_logs` + `until?`, `settle_ms?`, `timeout_ms?`               | Block until matching entries arrive (default 60 s, max 10 min). `until` returns everything through a terminal line; `settle_ms` gathers a burst. |
 | `clear_logs` | —                                                                          | Discard the buffer. The cursor keeps counting, so prefer `after` when other agents may be reading.          |

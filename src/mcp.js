@@ -15,6 +15,11 @@ const MAX_SETTLE_MS = 30_000;
 /** @typedef {import("./server.js").Listener} Listener */
 /** @typedef {{port?: number, host?: string}} BindOptions */
 /** @typedef {{name: string, description: string, inputSchema: object, handler: (args: Record<string, any>) => Promise<string>}} Tool */
+/**
+ * Shared per-connection state: whether the client can show the user a dialog
+ * (MCP elicitation), and the outbound-request function once the transport is up.
+ * @typedef {{elicitation?: boolean, request?: import("./jsonrpc.js").Rpc["request"]}} Session
+ */
 
 export const GUIDES = [
   "logger-methods",
@@ -29,7 +34,7 @@ export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under devel
 
 Setup, once per project:
 1. Check your project memory and the project's agent docs (AGENTS.md/CLAUDE.md) for a saved tiny-log setup from an earlier session. If one exists, reuse it: call \`listen\` and skip straight to verifying. If it is recorded as having failed, present the remaining options to the user instead.
-2. Otherwise call \`listen\` for the URL and the stream address, then \`hint\` for the facts to gather; answer them from the codebase and call hint again for the applicable options. When a user is present and the options differ materially (a source change versus none), present them with the concrete paths you found and let the user pick — their app knowledge beats inference. No user, or one obvious fit: take the least invasive.
+2. Otherwise call \`listen\` for the URL and the stream address, then \`hint\` for the facts to gather; answer them from the codebase and call hint again for the applicable options. When the client supports it, hint puts the choice directly in front of the user as a dialog and returns only what they picked — honor it. When it returns a menu instead, present the options yourself with the concrete paths you found and let the user pick — their app knowledge beats inference. No user, or one obvious fit: take the least invasive.
 3. Find the app's logger (a shared logger module or class, or plain console.*) and what the dev command prints. If the code already logs what you need, capture those calls — wrapping the logger's methods captures them even when its level is off or flag-controlled — before adding any log calls of your own. If you must add some, tag them with a unique marker and remove every tagged line when done; the dev-gated hook itself is worth keeping committed, it is what makes the next session instant.
 4. Hook it by what the code logs THROUGH, not where it runs — a web app with its own logger wants logger-methods (the tap runs in the page), while console/client.js covers plain console.* and uncaught errors; they compose. Prefer hooks that need no source change (stdout pipe, DevTools injection). Call through to the original, dev-gate any source change, never let delivery throw.
 5. Verify with one test log and read_logs. Then save the setup — the facts you passed to hint, the approach and where the hook lives, the filters with good signal, and how smoothly it went — to the project's agent docs if the project keeps them (teammates' agents benefit), else to your own project memory.
@@ -82,9 +87,9 @@ const OUTPUT_PROPERTIES = {
 /**
  * Builds the MCP tool set over a store and its HTTP listener.
  *
- * @param {{store: Store, defaults?: BindOptions}} deps
+ * @param {{store: Store, defaults?: BindOptions, session?: Session}} deps
  */
-export function createTools({ store, defaults = {} }) {
+export function createTools({ store, defaults = {}, session = {} }) {
   /** @type {Listener | null} */
   let listener = null;
 
@@ -190,7 +195,15 @@ export function createTools({ store, defaults = {} }) {
           return GUIDES.map((g) => wiringGuide(current.url, g).join("\n")).join("\n\n");
         if (name) return wiringGuide(current.url, name).join("\n");
         if (Object.values(facts).some((value) => value !== undefined && value !== "")) {
-          return buildOptions(facts).join("\n");
+          const options = buildOptions(facts);
+          // The http catch-all is always present; a dialog is only worth the
+          // interruption when there are at least two real alternatives.
+          const realOptions = options.filter((option) => option.name !== "http").length;
+          if (session.elicitation && session.request && realOptions >= 2) {
+            const outcome = await elicitChoice(session.request, current.url, options);
+            if (outcome) return outcome;
+          }
+          return renderMenu(options).join("\n");
         }
         return wiringIndex().join("\n");
       },
@@ -298,17 +311,21 @@ export function createTools({ store, defaults = {} }) {
 /**
  * JSON-RPC method handlers implementing the MCP tools-only surface.
  * @param {ReturnType<typeof createTools>} toolset
+ * @param {Session} [session]
  * @returns {Record<string, (params: any) => Promise<unknown>>}
  */
-export function createHandlers(toolset) {
+export function createHandlers(toolset, session = {}) {
   const byName = new Map(toolset.tools.map((tool) => [tool.name, tool]));
   return {
-    initialize: async (params) => ({
-      protocolVersion: params.protocolVersion ?? "2025-06-18",
-      capabilities: { tools: {} },
-      serverInfo: { name: pkg.name, version: pkg.version },
-      instructions: INSTRUCTIONS,
-    }),
+    initialize: async (params) => {
+      session.elicitation = Boolean(params?.capabilities?.elicitation);
+      return {
+        protocolVersion: params.protocolVersion ?? "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: pkg.name, version: pkg.version },
+        instructions: INSTRUCTIONS,
+      };
+    },
     "notifications/initialized": async () => {},
     ping: async () => ({}),
     "tools/list": async () => ({
@@ -336,7 +353,9 @@ export function createHandlers(toolset) {
  * @param {{store: Store, defaults?: BindOptions, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream}} options
  */
 export async function runMcp({ store, defaults, input, output }) {
-  const toolset = createTools({ store, defaults });
+  /** @type {Session} */
+  const session = {};
+  const toolset = createTools({ store, defaults, session });
   // Bind eagerly so an app wired to a pinned port can start sending before the
   // agent calls `listen`; the tool still reports the actual port.
   try {
@@ -344,7 +363,14 @@ export async function runMcp({ store, defaults, input, output }) {
   } catch (err) {
     process.stderr.write(`tiny-log-mcp: listener not started (${errorMessage(err)})\n`);
   }
-  await serveStdio({ input, output, handlers: createHandlers(toolset) });
+  await serveStdio({
+    input,
+    output,
+    handlers: (rpc) => {
+      session.request = rpc.request;
+      return createHandlers(toolset, session);
+    },
+  });
   await toolset.close();
 }
 
@@ -553,14 +579,19 @@ const TRANSPORT_LINES = {
 
 const JS_NAMES = new Set(["", "js", "ts", "javascript", "typescript", "node", "jsx", "tsx"]);
 
+const OTHER_CHOICE = "Other — I'll describe the hook in chat";
+const VERIFY_TAIL =
+  "Then verify the pick: emit one test log, read it back with read_logs, and start watching. Once verified, save the chosen setup (facts, approach, hook location, filters) to the project's agent docs or your project memory — the next session skips this.";
+
 /**
  * The applicable wiring options for these facts, roughly ordered by fit — a
- * filter, not a judge. The agent puts them in front of the user with the
- * concrete paths it found; the user's pick wins, because deciding is cheap
- * for the human and unreliable for the agent.
+ * filter, not a judge. When the client supports elicitation the user picks in
+ * a dialog; otherwise the agent presents the rendered menu and the user picks
+ * in chat. Deciding is cheap for the human and unreliable for the agent.
  *
+ * @typedef {{name: string, label: string, tradeoff: string}} WiringOption
  * @param {{language?: string, runs_in?: string, logger?: string, logger_package?: string, level_gated?: boolean, emits_ndjson?: boolean}} facts
- * @returns {string[]}
+ * @returns {WiringOption[]}
  */
 function buildOptions(facts) {
   const language = String(facts.language ?? "").toLowerCase();
@@ -571,79 +602,82 @@ function buildOptions(facts) {
   const ndjson = facts.emits_ndjson === true;
   const inBrowser = runsIn === "browser";
   const hasLogger = logger !== "" && !["console", "none"].includes(logger.toLowerCase());
+  // Options that capture downstream of a gated logger (console.*, stdout) never
+  // see the calls its level check drops. That blind spot must be on the label.
+  const gatedBlindSpot = hasLogger && gated ? `; will MISS ${logger}'s level-gated calls` : "";
 
-  /** @type {Array<[string, string, string]>} */
+  /** @type {WiringOption[]} */
   const options = [];
+  /** @param {string} name @param {string} label @param {string} tradeoff */
+  const add = (name, label, tradeoff) => options.push({ name, label, tradeoff });
+
   if (!JS_NAMES.has(language)) {
-    options.push([
+    add(
       "other-language",
       `a ${facts.language} handler/sink`,
       "one class wired into the logging config; keeps level and message",
-    ]);
-    if (!inBrowser) {
-      options.push([
+    );
+    if (!inBrowser)
+      add(
         "stdout",
         "pipe the dev command's stdout",
         "no code change; captures only what reaches stdout",
-      ]);
-    }
+      );
   } else {
     if (hasLogger) {
-      options.push([
+      add(
         "logger-methods",
         `wrap ${logger}'s level methods`,
         (gated
           ? "captures every call even though the level is flag/config-gated (the wrapper runs before the level check); "
           : "captures the calls the code already makes; ") +
           "one dev-gated source change, survives reloads",
-      ]);
+      );
     } else if (runsIn === "react-native") {
-      options.push([
-        "logger-methods",
-        "wrap console with the tap",
-        "React Native has no DOM for client.js",
-      ]);
+      add("logger-methods", "wrap console with the tap", "React Native has no DOM for client.js");
     }
     if (pkg in TRANSPORT_LINES) {
-      options.push([
+      add(
         "transport",
         `one line on ${pkg}'s transport hook`,
         "records keep level, message and fields" +
           (gated ? "; force its level to trace to beat the gate" : ""),
-      ]);
+      );
     }
     if (inBrowser) {
-      options.push(
-        [
-          "console",
-          "inject client.js with no code change",
-          "paste in the DevTools console (or via a browser tool); catches console.* and uncaught errors; lost on reload, nothing to clean up",
-        ],
-        [
-          "console",
-          "load client.js from source",
-          "script tag or entry-module injection; survives reloads; dev-gated source change",
-        ],
+      add(
+        "console",
+        "inject client.js with no code change",
+        `paste in the DevTools console (or via a browser tool); catches console.* and uncaught errors; lost on reload, nothing to clean up${gatedBlindSpot}`,
+      );
+      add(
+        "console",
+        "load client.js from source",
+        `script tag or entry-module injection; survives reloads; dev-gated source change${gatedBlindSpot}`,
       );
     } else if (runsIn !== "react-native") {
-      options.push([
+      add(
         "stdout",
         "pipe the dev command's stdout",
         "no code change" +
           (ndjson
             ? "; the NDJSON keeps level, time and fields"
-            : "; captures only what reaches stdout, plain-text levels are guessed"),
-      ]);
+            : "; captures only what reaches stdout, plain-text levels are guessed") +
+          gatedBlindSpot,
+      );
     }
   }
-  options.push([
-    "http",
-    "POST /ingest from anything",
-    "raw HTTP; a batch, one object, or plain text",
-  ]);
+  add("http", "POST /ingest from anything", "raw HTTP; a batch, one object, or plain text");
+  return options;
+}
 
+/**
+ * Today's text menu, for clients without elicitation or a dismissed dialog.
+ * @param {WiringOption[]} options @returns {string[]}
+ */
+function renderMenu(options) {
   const rows = options.map(
-    ([name, label, tradeoff], i) =>
+    ({ name, label, tradeoff }, i) =>
       `${i + 1}. ${label} — ${tradeoff} (snippet: hint interface=${name})`,
   );
   return [
@@ -652,6 +686,57 @@ function buildOptions(facts) {
     ...rows,
     `${options.length + 1}. Other — ask the user; they may know a hook you did not find (a logging util, a debug flag).`,
     "",
-    "Then verify the pick: emit one test log, read it back with read_logs, and start watching. Once verified, save the chosen setup (facts, approach, hook location, filters) to the project's agent docs or your project memory — the next session skips this.",
+    VERIFY_TAIL,
   ];
+}
+
+/**
+ * Puts the choice directly in front of the user via MCP elicitation. Returns
+ * the tool result for a decided dialog, or null to fall back to the menu
+ * (request failed / timed out / feature broke — never block the flow).
+ *
+ * @param {NonNullable<Session["request"]>} request
+ * @param {string} url
+ * @param {WiringOption[]} options
+ * @returns {Promise<string | null>}
+ */
+async function elicitChoice(request, url, options) {
+  const labels = [...options.map((o) => o.label), OTHER_CHOICE];
+  try {
+    const response = await request("elicitation/create", {
+      message: [
+        "How should tiny-log hook into this app's logs?",
+        ...options.map((o, i) => `${i + 1}. ${o.label} — ${o.tradeoff}`),
+      ].join("\n"),
+      requestedSchema: {
+        type: "object",
+        properties: {
+          choice: { type: "string", title: "Integration", enum: labels },
+        },
+        required: ["choice"],
+      },
+    });
+    if (response?.action !== "accept") {
+      return [
+        "The user dismissed the choice dialog — present the options in chat instead and let them pick there.",
+        "",
+        ...renderMenu(options),
+      ].join("\n");
+    }
+    const choice = response.content?.choice;
+    if (choice === OTHER_CHOICE) {
+      return "The user chose Other — ask them in chat which hook they have in mind, wire that, and verify with a test log.";
+    }
+    const picked = options.find((o) => o.label === choice);
+    if (!picked) return null;
+    return [
+      `The user chose: ${picked.label} (${picked.tradeoff}).`,
+      "",
+      ...wiringGuide(url, picked.name),
+      "",
+      VERIFY_TAIL,
+    ].join("\n");
+  } catch {
+    return null;
+  }
 }

@@ -117,6 +117,8 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   assert.match(menu, /^1\. wrap AppLogger's level methods/m);
   assert.match(menu, /flag\/config-gated/);
   assert.match(menu, /inject client\.js with no code change/);
+  // Both console options carry the blind spot the gate creates.
+  assert.equal(menu.match(/will MISS AppLogger's level-gated calls/g)?.length, 2);
   assert.match(menu, /load client\.js from source/);
   assert.match(menu, /Other — ask the user/);
   assert.match(menu, /agent docs or your project memory/);
