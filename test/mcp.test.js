@@ -54,7 +54,7 @@ test("initialize advertises tools and instructions", async () => {
   assert.deepEqual((await request("ping")).result, {});
 });
 
-test("tools/list exposes the four tools with schemas", async () => {
+test("tools/list exposes the five tools with schemas and annotations", async () => {
   const { result } = await request("tools/list");
   assert.deepEqual(
     result.tools.map((t) => t.name),
@@ -63,7 +63,24 @@ test("tools/list exposes the four tools with schemas", async () => {
   for (const tool of result.tools) {
     assert.equal(tool.inputSchema.type, "object");
     assert.ok(tool.description.length > 20);
+    assert.equal(typeof tool.annotations.title, "string");
+    assert.equal(typeof tool.annotations.readOnlyHint, "boolean");
+    assert.equal(typeof tool.annotations.destructiveHint, "boolean");
+    assert.equal(typeof tool.annotations.idempotentHint, "boolean");
+    assert.equal(tool.annotations.openWorldHint, false);
   }
+  assert.equal(
+    result.tools.find((tool) => tool.name === "read_logs").annotations.readOnlyHint,
+    true,
+  );
+  assert.equal(
+    result.tools.find((tool) => tool.name === "await_logs").annotations.readOnlyHint,
+    true,
+  );
+  assert.equal(
+    result.tools.find((tool) => tool.name === "clear_logs").annotations.destructiveHint,
+    true,
+  );
 });
 
 test("unknown methods and tools are reported as errors", async () => {
@@ -79,9 +96,13 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   // listen is operational: URL, cursor, stream address; wiring lives in hint.
   assert.match(
     listen.content[0].text,
-    /Monitor\(\{ ws: \{ url: "ws:\/\/127\.0\.0\.1:\d+\/stream\?after=0/,
+    /Claude Code: Monitor\(\{ ws: \{ url: "ws:\/\/127\.0\.0\.1:\d+\/stream\?after=0/,
   );
-  assert.match(listen.content[0].text, /tiny-log-mcp tail --url/);
+  assert.match(
+    listen.content[0].text,
+    /Codex\/other clients, persistent shell: tiny-log-mcp tail --url/,
+  );
+  assert.match(listen.content[0].text, /stop Monitor early with TaskStop/);
   assert.doesNotMatch(listen.content[0].text, /tap\(console/);
   assert.ok(listen.content[0].text.split("\n").length < 14);
 

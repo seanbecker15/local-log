@@ -4,8 +4,12 @@ An ephemeral local log collector with an [MCP](https://modelcontextprotocol.io) 
 coding agent can read what your app printed — in a browser, on a phone, or in a backend
 process — instead of asking you to paste console output. Zero runtime dependencies.
 
-```
+```sh
+# Claude Code
 claude mcp add tiny-log -- npx -y tiny-log-mcp
+
+# Codex CLI, desktop app, and IDE extension
+codex mcp add tiny-log -- npx -y tiny-log-mcp
 ```
 
 That is the whole install. The agent calls `listen`, gets a URL and copy-paste wiring snippets,
@@ -62,7 +66,7 @@ are simply kept; only tagged temporary ones get removed.
 
 | Tool         | Arguments                                                                  | Purpose                                                                                                     |
 | ------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the URL, the cursor, and the stream address to watch with Monitor. |
+| `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the URL, cursor, Claude Monitor call, and persistent-shell command. |
 | `hint`       | `logs?`                                                                    | The wiring recipe for a web app: `wrapper` \| `native` \| `none`. Bare: asks which. Terminal processes skip hint and pipe stdout. |
 | `read_logs`  | `after?`, `level_min?`, `include?`, `exclude?`, `source?`, `limit?`, `max_chars?` | Read buffered entries, oldest first, as compact text. Returns a cursor to pass back as `after`.       |
 | `await_logs` | same as `read_logs` + `until?`, `settle_ms?`, `timeout_ms?`               | Block until matching entries arrive (default 60 s, max 10 min). `until` returns everything through a terminal line; `settle_ms` gathers a burst. |
@@ -97,12 +101,13 @@ Three ways to read, by how long the agent is waiting:
   sequence) so one call returns the whole sequence instead of polling line by line.
 - **While you test by hand for a while** — the listener's `/stream` WebSocket pushes each matching
   entry the moment it arrives. In Claude Code the agent attaches its **Monitor** tool to it
-  (`listen` prints the exact call) and keeps working while your clicks show up as events; any
-  other agent, or you, can run `tiny-log-mcp tail --include … --until …` in a shell. `until`
-  closes the stream so the watch ends on its own.
+  (`listen` prints the exact call) and keeps working while your clicks show up as events. In Codex,
+  the agent runs `tiny-log-mcp tail --include … --until …` in a persistent terminal session and
+  resumes that session as events arrive; the same command works for any other agent or a human.
+  `until` closes either watch so it ends by itself.
 
-A typical loop: `listen` → wire → `read_logs` to confirm → start a Monitor on the stream with a
-tight filter → tell the user what to try → react to events as they land → fix.
+A typical loop: `listen` → wire → `read_logs` to confirm → start a Claude Monitor or persistent
+`tail` session with a tight filter → tell the user what to try → react to events as they land → fix.
 
 ## HTTP API
 
@@ -134,11 +139,29 @@ tiny-log-mcp tail       print matching entries as they arrive  [--include re] [-
 | `--capacity` / `TINY_LOG_CAPACITY`  | `10000` entries  |
 | `--url` / `TINY_LOG_URL` (pipe)     | `http://127.0.0.1:7710` |
 
-Pin a port per project in `.mcp.json` if you want the app's config to stay static:
+Pin a port per project if you want the app's config to stay static.
+
+Claude Code (`.mcp.json`):
 
 ```json
 { "mcpServers": { "tiny-log": { "command": "npx", "args": ["-y", "tiny-log-mcp"], "env": { "TINY_LOG_PORT": "7710" } } } }
 ```
+
+Codex (`.codex/config.toml` in a trusted project):
+
+```toml
+[mcp_servers.tiny-log]
+command = "npx"
+args = ["-y", "tiny-log-mcp"]
+# Codex defaults MCP calls to 60 seconds. This covers await_logs' 10-minute maximum.
+tool_timeout_sec = 620
+
+[mcp_servers.tiny-log.env]
+TINY_LOG_PORT = "7710"
+```
+
+Codex CLI, desktop, and IDE clients on the same host share this configuration. The longer tool
+timeout is Codex-only configuration; it does not change tiny-log's behavior in Claude Code.
 
 ## Development
 

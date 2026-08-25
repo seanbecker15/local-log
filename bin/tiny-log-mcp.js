@@ -33,6 +33,7 @@ Options:
 
 Examples:
   claude mcp add tiny-log -- npx -y tiny-log-mcp
+  codex mcp add tiny-log -- npx -y tiny-log-mcp
   npm run dev 2>&1 | npx -y tiny-log-mcp pipe --source api
   tiny-log-mcp tail --include 'TL-1|error' --until 'result=true'
 `;

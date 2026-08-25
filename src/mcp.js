@@ -14,7 +14,8 @@ const MAX_SETTLE_MS = 30_000;
 /** @typedef {import("./store.js").Entry} Entry */
 /** @typedef {import("./server.js").Listener} Listener */
 /** @typedef {{port?: number, host?: string}} BindOptions */
-/** @typedef {{name: string, description: string, inputSchema: object, handler: (args: Record<string, any>) => Promise<string>}} Tool */
+/** @typedef {{title?: string, readOnlyHint?: boolean, destructiveHint?: boolean, idempotentHint?: boolean, openWorldHint?: boolean}} ToolAnnotations */
+/** @typedef {{name: string, description: string, inputSchema: object, annotations: ToolAnnotations, handler: (args: Record<string, any>) => Promise<string>}} Tool */
 
 export const LOG_IMPLEMENTATIONS = ["wrapper", "native", "none"];
 
@@ -31,7 +32,7 @@ Wiring a web app, once per project — first check project memory and the projec
 Reading — pick by how long you are waiting:
 - read_logs: what is there now. Pass the last cursor as \`after\`; filter tightly (level_min, source, include, exclude).
 - await_logs: one thing you expect soon. \`until=<regex>\` returns everything through a terminal line in one call.
-- Monitor on the ws stream URL from \`listen\` (or \`tiny-log-mcp tail\` in a shell) when the user is going to test by hand for a while: each matching entry is pushed to you as it happens while you keep working. Tell the user what to try, then leave them room to explore. Filter to the lines you would act on and include the failure signatures, not just the happy path.
+- Long watch while the user tests by hand: Claude Code attaches Monitor to the ws stream URL from \`listen\`; Codex and other clients run \`tiny-log-mcp tail\` in a persistent shell. Each matching entry is pushed as it happens while you keep working. Tell the user what to try, then leave them room to explore. Filter to the lines you would act on and include the failure signatures, not just the happy path.
 Prefer \`after\` cursors over clear_logs when other agents share the buffer.`;
 
 const FILTER_PROPERTIES = {
@@ -120,6 +121,13 @@ export function createTools({ store, defaults = {} }) {
         },
         additionalProperties: false,
       },
+      annotations: {
+        title: "Start log listener",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       async handler({ port, host }) {
         const current = await ensureListener({ port, host });
         return describeListener(current, store.cursor);
@@ -144,6 +152,13 @@ export function createTools({ store, defaults = {} }) {
           },
         },
         additionalProperties: false,
+      },
+      annotations: {
+        title: "Get log wiring recipe",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
       },
       async handler({ logs }) {
         const current = await ensureListener();
@@ -170,6 +185,13 @@ export function createTools({ store, defaults = {} }) {
         type: "object",
         properties: { ...FILTER_PROPERTIES, ...OUTPUT_PROPERTIES },
         additionalProperties: false,
+      },
+      annotations: {
+        title: "Read buffered logs",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
       },
       async handler(args) {
         const filter = toFilter(args);
@@ -211,6 +233,13 @@ export function createTools({ store, defaults = {} }) {
         },
         additionalProperties: false,
       },
+      annotations: {
+        title: "Wait for matching logs",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       async handler(args) {
         const filter = toFilter(args);
         const until = toUntil(args.until);
@@ -241,6 +270,13 @@ export function createTools({ store, defaults = {} }) {
         "Discard all buffered logs (the cursor keeps counting). Prefer `after` cursors when " +
         "other agents may be reading; use this to reset before an isolated reproduction.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      annotations: {
+        title: "Clear buffered logs",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
       async handler() {
         const { cleared, cursor } = store.clear();
         return `Cleared ${cleared} entries. Cursor is ${cursor}.`;
@@ -278,10 +314,11 @@ export function createHandlers(toolset) {
     "notifications/initialized": async () => {},
     ping: async () => ({}),
     "tools/list": async () => ({
-      tools: toolset.tools.map(({ name, description, inputSchema }) => ({
+      tools: toolset.tools.map(({ name, description, inputSchema, annotations }) => ({
         name,
         description,
         inputSchema,
+        annotations,
       })),
     }),
     "tools/call": async ({ name, arguments: args = {} }) => {
@@ -389,9 +426,9 @@ function describeListener({ url, host, port }, cursor) {
     "Wiring a web app: call hint — it asks which log implementation the app has and returns the recipe. A terminal process just pipes: <dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api.",
     "Read now: read_logs.  Wait for one thing: await_logs (until=<regex> returns everything through a terminal line).",
     "Watch while the user drives (minutes, hands-free): each matching entry is pushed to you as it happens —",
-    `  Monitor({ ws: { url: "${ws}?after=${cursor}&include=<regex>&exclude=<regex>&level_min=<level>&until=<regex>" }, description: "<what you are watching for>", persistent: true })`,
-    `  shell: tiny-log-mcp tail --url ${url} --include <regex> [--until <regex>]`,
-    "  Filter to the lines you'd act on, and include the failure signatures, not only the happy path. Drop params you don't need; until closes the stream so the watch ends by itself; stop early with TaskStop.",
+    `  Claude Code: Monitor({ ws: { url: "${ws}?after=${cursor}&include=<regex>&exclude=<regex>&level_min=<level>&until=<regex>" }, description: "<what you are watching for>", persistent: true })`,
+    `  Codex/other clients, persistent shell: tiny-log-mcp tail --url ${url} --include <regex> [--until <regex>]`,
+    "  Filter to actionable lines and include failure signatures. Drop params you don't need; until ends either watch. In Claude, stop Monitor early with TaskStop; otherwise stop the terminal process.",
     `Web UI for the human: ${url}/`,
   );
   return lines.join("\n");
