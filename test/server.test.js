@@ -143,17 +143,53 @@ test("DELETE /logs clears and /health reports", async () => {
 test("serves the UI assets, the browser client and 404s elsewhere", async () => {
   const ui = await fetch(`${listener.url}/`);
   assert.equal(ui.headers.get("content-type"), "text/html; charset=utf-8");
-  assert.match(await ui.text(), /tiny-log-mcp/);
+  assert.match(await ui.text(), /id="presence"/);
   const app = await fetch(`${listener.url}/index.js`);
   assert.equal(app.headers.get("content-type"), "text/javascript; charset=utf-8");
   assert.match(await app.text(), /Coalesce an SSE replay or live burst/);
   const styles = await fetch(`${listener.url}/index.css`);
   assert.equal(styles.headers.get("content-type"), "text/css; charset=utf-8");
   assert.match(await styles.text(), /content: attr\(data-empty\)/);
+  const activity = await fetch(`${listener.url}/activity`);
+  assert.equal(activity.headers.get("content-type"), "text/html; charset=utf-8");
+  assert.match(await activity.text(), /Delivered to agents/);
+  const activityApp = await fetch(`${listener.url}/activity.js`);
+  assert.equal(activityApp.headers.get("content-type"), "text/javascript; charset=utf-8");
+  assert.match(await activityApp.text(), /activity-events/);
   const client = await fetch(`${listener.url}/client.js`);
   assert.equal(client.status, 200);
   assert.match(await client.text(), /unhandledrejection/);
   assert.equal((await fetch(`${listener.url}/nope`)).status, 404);
+});
+
+test("activity feed replays exact deliveries and can be cleared", async () => {
+  listener.activity.clear();
+  listener.activity.deliver({
+    channel: "mcp",
+    client: "mcp-read",
+    tool: "read_logs",
+    args: { include: "signal" },
+    text: "exact payload",
+    error: false,
+  });
+
+  const res = await fetch(`${listener.url}/activity-events`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let received = "";
+  while (!received.includes("exact payload")) {
+    const { value } = await reader.read();
+    received += decoder.decode(value);
+  }
+  assert.match(received, /event: presence/);
+  assert.match(received, /"viewers":1/);
+  assert.match(received, /event: delivery/);
+  await reader.cancel();
+
+  const state = await json("/activity-state");
+  assert.equal(state.body.deliveries[0].text, "exact payload");
+  const cleared = await json("/activity", { method: "DELETE" });
+  assert.deepEqual(cleared.body, { cleared: 1 });
 });
 
 test("GET /events connects immediately when the buffer is empty", async () => {
@@ -164,8 +200,14 @@ test("GET /events connects immediately when the buffer is empty", async () => {
     const res = await fetch(`${listener.url}/events`, { signal: controller.signal });
     assert.equal(res.status, 200);
     const reader = res.body.getReader();
-    const { value } = await reader.read();
-    assert.match(new TextDecoder().decode(value), /: connected/);
+    const decoder = new TextDecoder();
+    let received = "";
+    while (!received.includes("event: presence")) {
+      const { value } = await reader.read();
+      received += decoder.decode(value);
+    }
+    assert.match(received, /: connected/);
+    assert.match(received, /"monitors":0/);
     await reader.cancel();
   } finally {
     clearTimeout(timeout);

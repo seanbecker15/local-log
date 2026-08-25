@@ -73,12 +73,23 @@ background after the session ends, and every session gets its own buffer.
 
 ```
   your app ──► POST /ingest ──► ring buffer ──► read_logs / await_logs (MCP)
-  (browser, device, backend)          │
-                                      └──► web UI at /  (for you)
+  (browser, device, backend)          │                       │
+                                      └──► logs UI at /        └──► activity UI at /activity
 ```
 
 Filtering happens when logs are **read**, never when they arrive, so several agents (or
 sub-agents) can watch the same buffer with different filters.
+
+## Web UI
+
+The URL returned by `listen` opens a live, filterable log viewer. Its floating monitor indicator
+opens `/activity`, which separates active WebSocket streams, in-flight `await_logs` calls, and UI
+viewers. The activity transcript shows the exact formatted text returned by `read_logs` and
+`await_logs`, plus each frame delivered to a Claude Monitor or `tail` stream.
+
+“Active monitors” counts concurrent waits and streams, not unique agents: MCP and WebSocket
+clients do not provide a stable agent identity. The transcript is bounded, exists only in memory,
+and can be cleared independently of the application log buffer.
 
 ## Wiring an app
 
@@ -115,7 +126,7 @@ are simply kept; only tagged temporary ones get removed.
 
 | Tool         | Arguments                                                                  | Purpose                                                                                                     |
 | ------------ | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the URL, cursor, Claude Monitor call, and persistent-shell command. |
+| `listen`     | `port?`, `host?`                                                           | Start (or report) the listener; returns the Web UI/activity URLs, cursor, Claude Monitor call, and persistent-shell command. |
 | `hint`       | `logs?`                                                                    | The wiring recipe for a web app: `wrapper` \| `native` \| `none`. Bare: asks which. Terminal processes skip hint and pipe stdout. |
 | `read_logs`  | `after?`, `level_min?`, `include?`, `exclude?`, `source?`, `limit?`, `max_chars?` | Read buffered entries, oldest first, as compact text. Returns a cursor to pass back as `after`.       |
 | `await_logs` | same as `read_logs` + `until?`, `settle_ms?`, `timeout_ms?`               | Block until matching entries arrive (default 60 s, max 10 min). `until` returns everything through a terminal line; `settle_ms` gathers a burst. |
@@ -157,6 +168,9 @@ A typical loop: `listen` → wire → `read_logs` to confirm → start a Claude 
 | `GET`    | `/logs`   | Same filter vocabulary as the tools, plus `wait=<ms>` (up to 10 min) to long-poll. Same-origin only. |
 | `DELETE` | `/logs`   | Clear the buffer.                                                                            |
 | `GET`    | `/events` | Server-sent events feed used by the web UI.                                                  |
+| `GET`    | `/activity` | Activity UI; `DELETE` clears its in-memory delivery transcript.                           |
+| `GET`    | `/activity-events` | Server-sent presence and exact agent-delivery payloads.                             |
+| `GET`    | `/activity-state` | Current presence counts and recent deliveries as JSON.                                  |
 | `GET`    | `/stream` | WebSocket: one text frame (or JSON with `format=json`) per matching entry as it arrives; same filter vocabulary plus `until`. Same-origin only. |
 | `GET`    | `/health` | `{ok, name, version, cursor, size}`.                                                         |
 | `GET`    | `/`       | Web UI. `GET /client.js` is the browser drop-in.                                             |
@@ -205,6 +219,8 @@ timeout is Codex-only configuration; it does not change tiny-log's behavior in C
 
 - The listener binds to `127.0.0.1` by default, keeps logs only in memory, and shuts down with the
   MCP session. Nothing is persisted by tiny-log.
+- The activity transcript also lives only in memory, but it repeats the exact subset of logs sent
+  to agents. Treat `/activity` with the same care as the main log viewer.
 - There is no authentication or TLS. Do not expose the listener to the public internet.
 - Only `/ingest` grants cross-origin browser access. Browser read APIs do not grant cross-origin
   access, and `/stream` rejects foreign browser origins. This is a browser boundary, not

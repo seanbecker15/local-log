@@ -50,6 +50,7 @@ test("initialize advertises tools and instructions", async () => {
   assert.match(result.instructions, /Don't fight the gate/);
   assert.match(result.instructions, /comfortable shipping/);
   assert.match(result.instructions, /pipe --source api/);
+  assert.match(result.instructions, /surface its Web UI URL prominently/);
   child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
   assert.deepEqual((await request("ping")).result, {});
 });
@@ -103,6 +104,8 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
     /Codex\/other clients, persistent shell: tiny-log-mcp tail --url/,
   );
   assert.match(listen.content[0].text, /stop Monitor early with TaskStop/);
+  assert.match(listen.content[0].text, /surface this link to the user now/);
+  assert.match(listen.content[0].text, /\/activity/);
   assert.doesNotMatch(listen.content[0].text, /tap\(console/);
   assert.ok(listen.content[0].text.split("\n").length < 14);
 
@@ -156,8 +159,14 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
 
   const empty = await callTool("read_logs");
   assert.match(empty.content[0].text, /No matching logs/);
+  let activity = await fetch(`${url}/activity-state`).then((r) => r.json());
+  assert.equal(activity.deliveries.at(-1).tool, "read_logs");
+  assert.equal(activity.deliveries.at(-1).text, empty.content[0].text);
 
   const waiting = callTool("await_logs", { level_min: "error", timeout_ms: 5000 });
+  await new Promise((r) => setTimeout(r, 20));
+  activity = await fetch(`${url}/activity-state`).then((r) => r.json());
+  assert.equal(activity.presence.waits, 1);
   await fetch(`${url}/ingest`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -177,6 +186,10 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   assert.match(awaited.content[0].text, /^1 entry/);
   assert.match(awaited.content[0].text, /ERROR api TypeError: boom\n {8}at handler/);
   assert.match(awaited.content[0].text, /meta: \{"reqId":"r1"\}/);
+  activity = await fetch(`${url}/activity-state`).then((r) => r.json());
+  assert.equal(activity.presence.waits, 0);
+  assert.equal(activity.deliveries.at(-1).tool, "await_logs");
+  assert.equal(activity.deliveries.at(-1).text, awaited.content[0].text);
 
   const filtered = await callTool("read_logs", { exclude: "health" });
   assert.doesNotMatch(filtered.content[0].text, /GET \/health/);

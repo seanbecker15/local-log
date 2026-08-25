@@ -56,6 +56,26 @@ test("/stream pushes one frame per matching entry as it arrives", async () => {
   ws.close();
 });
 
+test("/stream reports an active monitor and records the exact delivered frame", async () => {
+  listener.activity.clear();
+  const pending = collect({ include: "observed" }, 1);
+  await new Promise((r) => setTimeout(r, 50));
+  let state = await fetch(`${listener.url}/activity-state`).then((r) => r.json());
+  assert.equal(state.presence.streams, 1);
+  assert.equal(state.presence.monitors, 1);
+
+  store.add({ text: "observed payload", level: "warn", source: "web" });
+  const { frames, ws } = await pending;
+  state = await fetch(`${listener.url}/activity-state`).then((r) => r.json());
+  assert.equal(state.deliveries.at(-1).channel, "stream");
+  assert.equal(state.deliveries.at(-1).text, frames[0]);
+
+  ws.close();
+  await new Promise((r) => setTimeout(r, 20));
+  state = await fetch(`${listener.url}/activity-state`).then((r) => r.json());
+  assert.equal(state.presence.streams, 0);
+});
+
 test("/stream replays from `after` and closes itself on `until`", async () => {
   store.clear();
   const first = store.add({ text: "step 1" });

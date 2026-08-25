@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent activity · tiny-log-mcp</title>
+    <link rel="stylesheet" href="/index.css" />
+  </head>
+  <body class="activity-page">
+    <header>
+      <strong>tiny-log-mcp / activity</strong>
+      <a class="nav-link" href="/">logs</a>
+      <label class="follow"><input id="follow" type="checkbox" checked /> follow</label>
+      <button id="clear" type="button">clear transcript</button>
+      <span id="status" aria-live="polite">connecting</span>
+    </header>
+    <main class="activity-main">
+      <section class="activity-summary" aria-label="Current observers">
+        <p><strong id="monitors">0</strong> <span id="monitor-label">active monitors</span></p>
+        <dl>
+          <div><dt>stream</dt><dd id="streams">0</dd></div>
+          <div><dt>waiting</dt><dd id="waits">0</dd></div>
+          <div><dt>viewing UI</dt><dd id="viewers">0</dd></div>
+        </dl>
+      </section>
+      <div class="activity-heading">
+        <strong>Delivered to agents</strong>
+        <span>exact MCP and stream payloads · memory only</span>
+      </div>
+      <ol id="deliveries" class="deliveries" data-empty="No agent deliveries yet."></ol>
+    </main>
+    <script src="/activity.js"></script>
+  </body>
+</html>

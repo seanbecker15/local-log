@@ -5,6 +5,8 @@ const levelSelect = document.getElementById("level");
 const follow = document.getElementById("follow");
 const status = document.getElementById("status");
 const clearButton = document.getElementById("clear");
+const presence = document.getElementById("presence");
+const presenceLabel = document.getElementById("presence-label");
 const MAX_ENTRIES = 5000;
 const RENDER_DELAY_MS = 50;
 const entries = [];
@@ -64,6 +66,13 @@ feed.addEventListener("entry", (event) => {
 feed.addEventListener("clear", () => {
   entries.length = 0;
   scheduleRender();
+});
+feed.addEventListener("presence", (event) => {
+  const counts = JSON.parse(event.data);
+  const noun = counts.monitors === 1 ? "monitor" : "monitors";
+  presenceLabel.textContent = `${counts.monitors} ${noun}`;
+  presence.dataset.active = String(counts.monitors > 0);
+  presence.title = `${counts.streams} stream · ${counts.waits} waiting · ${counts.viewers} viewing`;
 });
 feed.onopen = () => {
   connection = "live";

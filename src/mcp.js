@@ -1,4 +1,5 @@
 import pkg from "../package.json" with { type: "json" };
+import { createActivity } from "./activity.js";
 import { FilterError, MAX_LIMIT, parseFilter, toRegExp } from "./filter.js";
 import { DEFAULT_MAX_CHARS, formatEntries, formatHeader } from "./format.js";
 import { INVALID_PARAMS, RpcError, serveStdio } from "./jsonrpc.js";
@@ -20,6 +21,8 @@ const MAX_SETTLE_MS = 30_000;
 export const LOG_IMPLEMENTATIONS = ["wrapper", "native", "none"];
 
 export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under development into a buffer you can read or watch. Reach for it whenever you need to see what the app printed instead of asking the user to paste console output.
+
+Whenever you call \`listen\`, surface its Web UI URL prominently to the user. Do this even when you are also starting a Monitor or terminal watch: the UI lets the human inspect the shared logs and see exactly what monitoring agents receive.
 
 A backend or terminal process needs no setup: run it as \`<dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api\`. The guided wiring below is for web apps (other ecosystems: POST /ingest — contributions welcome).
 
@@ -82,6 +85,7 @@ const OUTPUT_PROPERTIES = {
 export function createTools({ store, defaults = {} }) {
   /** @type {Listener | null} */
   let listener = null;
+  const activity = createActivity();
 
   /** @param {BindOptions} [options] @returns {Promise<Listener>} */
   async function ensureListener({ port, host } = {}) {
@@ -93,7 +97,7 @@ export function createTools({ store, defaults = {} }) {
       return listener;
     }
     if (listener) await listener.close();
-    listener = await startServer(store, want);
+    listener = await startServer(store, { ...want, activity });
     return listener;
   }
 
@@ -287,6 +291,7 @@ export function createTools({ store, defaults = {} }) {
   return {
     tools,
     ensureListener,
+    activity,
     get listener() {
       return listener;
     },
@@ -304,13 +309,17 @@ export function createTools({ store, defaults = {} }) {
  */
 export function createHandlers(toolset) {
   const byName = new Map(toolset.tools.map((tool) => [tool.name, tool]));
+  let clientName = "MCP client";
   return {
-    initialize: async (params) => ({
-      protocolVersion: params.protocolVersion ?? "2025-06-18",
-      capabilities: { tools: {} },
-      serverInfo: { name: pkg.name, version: pkg.version },
-      instructions: INSTRUCTIONS,
-    }),
+    initialize: async (params) => {
+      clientName = params.clientInfo?.name || clientName;
+      return {
+        protocolVersion: params.protocolVersion ?? "2025-06-18",
+        capabilities: { tools: {} },
+        serverInfo: { name: pkg.name, version: pkg.version },
+        instructions: INSTRUCTIONS,
+      };
+    },
     "notifications/initialized": async () => {},
     ping: async () => ({}),
     "tools/list": async () => ({
@@ -324,11 +333,35 @@ export function createHandlers(toolset) {
     "tools/call": async ({ name, arguments: args = {} }) => {
       const tool = byName.get(name);
       if (!tool) throw new RpcError(INVALID_PARAMS, `unknown tool: ${name}`);
+      const waiting = name === "await_logs" ? toolset.activity.open("wait") : null;
       try {
         const text = await tool.handler(args ?? {});
+        if (name === "read_logs" || name === "await_logs") {
+          toolset.activity.deliver({
+            channel: "mcp",
+            client: waiting ? `${clientName} · ${waiting.id}` : clientName,
+            tool: name,
+            args: args ?? {},
+            text,
+            error: false,
+          });
+        }
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: errorMessage(err) }], isError: true };
+        const text = errorMessage(err);
+        if (name === "read_logs" || name === "await_logs") {
+          toolset.activity.deliver({
+            channel: "mcp",
+            client: waiting ? `${clientName} · ${waiting.id}` : clientName,
+            tool: name,
+            args: args ?? {},
+            text,
+            error: true,
+          });
+        }
+        return { content: [{ type: "text", text }], isError: true };
+      } finally {
+        waiting?.close();
       }
     },
   };
@@ -408,6 +441,7 @@ function describeListener({ url, host, port }, cursor) {
   const ws = `${url.replace(/^http/, "ws")}/stream`;
   const lines = [
     `tiny-log-mcp is listening at ${url} (cursor ${cursor}; pass after=${cursor} to read only what arrives from now).`,
+    `Web UI — surface this link to the user now: ${url}/  Agent activity: ${url}/activity`,
   ];
   if (host === "0.0.0.0" || host === "::") {
     const lan = lanAddresses();
@@ -429,7 +463,6 @@ function describeListener({ url, host, port }, cursor) {
     `  Claude Code: Monitor({ ws: { url: "${ws}?after=${cursor}&include=<regex>&exclude=<regex>&level_min=<level>&until=<regex>" }, description: "<what you are watching for>", persistent: true })`,
     `  Codex/other clients, persistent shell: tiny-log-mcp tail --url ${url} --include <regex> [--until <regex>]`,
     "  Filter to actionable lines and include failure signatures. Drop params you don't need; until ends either watch. In Claude, stop Monitor early with TaskStop; otherwise stop the terminal process.",
-    `Web UI for the human: ${url}/`,
   );
   return lines.join("\n");
 }

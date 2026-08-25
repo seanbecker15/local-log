@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { networkInterfaces } from "node:os";
 import pkg from "../package.json" with { type: "json" };
+import { createActivity } from "./activity.js";
 import { FilterError, MAX_LIMIT, matches, parseFilter, toRegExp } from "./filter.js";
 import { DEFAULT_MAX_CHARS, formatEntries } from "./format.js";
 import { safeStringify } from "./store.js";
@@ -9,7 +10,8 @@ import { errorMessage } from "./util.js";
 import { acceptWebSocket } from "./ws.js";
 
 /** @typedef {import("./store.js").Store} Store */
-/** @typedef {{server: http.Server, host: string, port: number, url: string, close: () => Promise<void>}} Listener */
+/** @typedef {import("./activity.js").Activity} Activity */
+/** @typedef {{server: http.Server, host: string, port: number, url: string, activity: Activity, close: () => Promise<void>}} Listener */
 
 export const DEFAULT_PORT = 7710;
 export const DEFAULT_HOST = "127.0.0.1";
@@ -20,6 +22,8 @@ const PUBLIC_DIR = new URL("../public/", import.meta.url);
 
 const STATIC = {
   "/": ["index.html", "text/html; charset=utf-8"],
+  "/activity": ["activity.html", "text/html; charset=utf-8"],
+  "/activity.js": ["activity.js", "text/javascript; charset=utf-8"],
   "/index.css": ["index.css", "text/css; charset=utf-8"],
   "/index.js": ["index.js", "text/javascript; charset=utf-8"],
   "/client.js": ["client.js", "text/javascript; charset=utf-8"],
@@ -42,17 +46,17 @@ const STATIC = {
  * the UI itself so a stray site cannot read your dev logs.
  *
  * @param {Store} store
- * @param {{maxWaitMs?: number}} [options]
+ * @param {{maxWaitMs?: number, activity?: Activity}} [options]
  * @returns {http.Server}
  */
-export function createServer(store, { maxWaitMs = MAX_WAIT_MS } = {}) {
+export function createServer(store, { maxWaitMs = MAX_WAIT_MS, activity = createActivity() } = {}) {
   const server = http.createServer((req, res) => {
-    handle(store, req, res, maxWaitMs).catch((err) => {
+    handle(store, activity, req, res, maxWaitMs).catch((err) => {
       if (!res.headersSent) sendJson(res, 500, { error: errorMessage(err) });
       else res.end();
     });
   });
-  server.on("upgrade", (req, socket, head) => stream(store, req, socket, head));
+  server.on("upgrade", (req, socket, head) => stream(store, activity, req, socket, head));
   return server;
 }
 
@@ -61,14 +65,14 @@ export function createServer(store, { maxWaitMs = MAX_WAIT_MS } = {}) {
  * `listen` tool reports the port actually in use, so the agent always knows.
  *
  * @param {Store} store
- * @param {{port?: number, host?: string, maxWaitMs?: number}} [options]
+ * @param {{port?: number, host?: string, maxWaitMs?: number, activity?: Activity}} [options]
  * @returns {Promise<Listener>}
  */
 export async function startServer(
   store,
-  { port = DEFAULT_PORT, host = DEFAULT_HOST, maxWaitMs } = {},
+  { port = DEFAULT_PORT, host = DEFAULT_HOST, maxWaitMs, activity = createActivity() } = {},
 ) {
-  const server = createServer(store, { maxWaitMs });
+  const server = createServer(store, { maxWaitMs, activity });
   try {
     await listen(server, port, host);
   } catch (err) {
@@ -87,6 +91,7 @@ export async function startServer(
     host,
     port: actualPort,
     url: `http://${urlHost(host)}:${actualPort}`,
+    activity,
     close() {
       server.closeAllConnections();
       return /** @type {Promise<void>} */ (new Promise((resolve) => server.close(() => resolve())));
@@ -104,11 +109,12 @@ export function lanAddresses() {
 
 /**
  * @param {Store} store
+ * @param {Activity} activity
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  * @param {number} maxWaitMs
  */
-async function handle(store, req, res, maxWaitMs) {
+async function handle(store, activity, req, res, maxWaitMs) {
   const url = new URL(req.url ?? "/", "http://localhost");
   const { pathname } = url;
 
@@ -121,7 +127,16 @@ async function handle(store, req, res, maxWaitMs) {
 
   if (pathname === "/logs" && req.method === "GET") return readLogs(store, res, url, maxWaitMs);
   if (pathname === "/logs" && req.method === "DELETE") return sendJson(res, 200, store.clear());
-  if (pathname === "/events" && req.method === "GET") return events(store, req, res);
+  if (pathname === "/events" && req.method === "GET") return events(store, activity, req, res);
+  if (pathname === "/activity-events" && req.method === "GET") {
+    return activityEvents(activity, req, res);
+  }
+  if (pathname === "/activity-state" && req.method === "GET") {
+    return sendJson(res, 200, { presence: activity.snapshot(), deliveries: activity.recent() });
+  }
+  if (pathname === "/activity" && req.method === "DELETE") {
+    return sendJson(res, 200, activity.clear());
+  }
   if (pathname === "/health" && req.method === "GET") {
     return sendJson(res, 200, {
       ok: true,
@@ -244,10 +259,12 @@ async function readLogs(store, res, url, maxWaitMs) {
 
 /**
  * @param {Store} store
+ * @param {Activity} activity
  * @param {http.IncomingMessage} req
  * @param {http.ServerResponse} res
  */
-function events(store, req, res) {
+function events(store, activity, req, res) {
+  const viewer = activity.open("viewer");
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -257,17 +274,53 @@ function events(store, req, res) {
   // buffer is empty. Otherwise the UI stays "connecting" until the first log
   // or the 25-second heartbeat.
   res.write(": connected\n\n");
-  /** @type {import("./store.js").Subscriber} */
+  /** @param {"entry" | "clear" | "presence"} event @param {any} data */
   const send = (event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
+  send("presence", activity.snapshot());
   for (const entry of store.query(parseFilter({ limit: SSE_REPLAY }))) send("entry", entry);
-  const unsubscribe = store.subscribe(send);
+  const unsubscribeStore = store.subscribe(send);
+  const unsubscribeActivity = activity.subscribe((event, data) => {
+    if (event === "presence") send(event, data);
+  });
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), 25_000);
+  heartbeat.unref();
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribeStore();
+    unsubscribeActivity();
+    viewer.close();
+  });
+}
+
+/**
+ * Same-origin activity feed for the observer UI. Replays the bounded delivery
+ * transcript, then emits presence and exact payloads as they change.
+ * @param {Activity} activity
+ * @param {http.IncomingMessage} req
+ * @param {http.ServerResponse} res
+ */
+function activityEvents(activity, req, res) {
+  const viewer = activity.open("viewer");
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+  });
+  /** @param {string} event @param {unknown} data */
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  send("presence", activity.snapshot());
+  for (const delivery of activity.recent()) send("delivery", delivery);
+  const unsubscribe = activity.subscribe(send);
   const heartbeat = setInterval(() => res.write(": ping\n\n"), 25_000);
   heartbeat.unref();
   req.on("close", () => {
     clearInterval(heartbeat);
     unsubscribe();
+    viewer.close();
   });
 }
 
@@ -279,11 +332,12 @@ function events(store, req, res) {
  * `tail` command; same-origin only, like every other read.
  *
  * @param {Store} store
+ * @param {Activity} activity
  * @param {http.IncomingMessage} req
  * @param {import("node:stream").Duplex} socket
  * @param {Buffer} head
  */
-function stream(store, req, socket, head) {
+function stream(store, activity, req, socket, head) {
   const url = new URL(req.url ?? "/", "http://localhost");
   const refuse = (/** @type {string} */ status, /** @type {string} */ body = "") => {
     socket.write(
@@ -314,10 +368,21 @@ function stream(store, req, socket, head) {
 
   const ws = acceptWebSocket(req, socket, head);
   if (!ws) return;
+  const watcher = activity.open("stream");
+  ws.onClose(watcher.close);
   /** @param {import("./store.js").Entry} entry */
   const emit = (entry) => {
     if (ws.closed) return;
-    ws.send(asJson ? JSON.stringify(entry) : formatEntries([entry], { maxChars }));
+    const text = asJson ? JSON.stringify(entry) : formatEntries([entry], { maxChars });
+    ws.send(text);
+    activity.deliver({
+      channel: "stream",
+      client: watcher.id,
+      tool: "monitor",
+      args: params,
+      text,
+      error: false,
+    });
     if (until?.test(entry.text)) ws.close(1000, "until matched");
   };
   for (const entry of store.query({ ...filter, after, limit: MAX_LIMIT })) emit(entry);
