@@ -101,6 +101,27 @@ test("wait times out with an empty result", async () => {
   assert.ok(Date.now() - started >= 25);
 });
 
+test("waitFor resolves when the readiness predicate holds and reports timeouts with what it has", async () => {
+  const store = createStore();
+  const done = store.waitFor(all(), 1000, (found) => found.some((e) => /result=true/.test(e.text)));
+  store.add({ text: "step 1" });
+  store.add({ text: "step 2" });
+  store.add({ text: "result=true" });
+  const { entries, satisfied } = await done;
+  assert.equal(satisfied, true);
+  assert.deepEqual(
+    entries.map((e) => e.text),
+    ["step 1", "step 2", "result=true"],
+  );
+  store.add({ text: "later" });
+  const partial = await store.waitFor(all({ after: 3 }), 30, (found) => found.length >= 5);
+  assert.equal(partial.satisfied, false);
+  assert.deepEqual(
+    partial.entries.map((e) => e.text),
+    ["later"],
+  );
+});
+
 test("multiple waiters with different filters are each satisfied", async () => {
   const store = createStore();
   const errors = store.wait(all({ level_min: "error" }), 1000);

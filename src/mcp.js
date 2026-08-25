@@ -1,27 +1,43 @@
 import pkg from "../package.json" with { type: "json" };
-import { FilterError, MAX_LIMIT, parseFilter } from "./filter.js";
+import { FilterError, MAX_LIMIT, parseFilter, toRegExp } from "./filter.js";
 import { DEFAULT_MAX_CHARS, formatEntries, formatHeader } from "./format.js";
 import { INVALID_PARAMS, RpcError, serveStdio } from "./jsonrpc.js";
 import { LEVELS } from "./levels.js";
 import { DEFAULT_HOST, DEFAULT_PORT, lanAddresses, MAX_WAIT_MS, startServer } from "./server.js";
 import { errorMessage } from "./util.js";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_SETTLE_MS = 500;
+const MAX_SETTLE_MS = 30_000;
 
 /** @typedef {import("./store.js").Store} Store */
+/** @typedef {import("./store.js").Entry} Entry */
 /** @typedef {import("./server.js").Listener} Listener */
 /** @typedef {{port?: number, host?: string}} BindOptions */
 /** @typedef {{name: string, description: string, inputSchema: object, handler: (args: Record<string, any>) => Promise<string>}} Tool */
 
-export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under development (browser, phone/device, backend process) into a buffer you can read. Reach for it whenever you need to see what the app printed instead of asking the user to paste console output.
+export const GUIDES = [
+  "stdout",
+  "browser",
+  "logger-methods",
+  "transport",
+  "other-language",
+  "http",
+];
+
+export const INSTRUCTIONS = `tiny-log-mcp collects logs from the app under development (browser, phone/device, backend process) into a buffer you can read or watch. Reach for it whenever you need to see what the app printed instead of asking the user to paste console output.
 
 Setup, once per project:
-1. Call \`listen\` to get the URL.
-2. Find the app's logger: grep for a shared logger module or class (\`logger.\`, \`createLogger\`, \`pino(\`, \`winston\`, \`consola\`, \`log4js\`, …) or plain \`console.*\`, and check what the dev command prints to stdout.
-3. Hook it with the easiest matching interface — \`listen\` prints a snippet for each: (A) it writes to stdout → pipe the dev command, no code change; (B) browser page → one <script> tag; (C) a logger object/class with level methods → wrap each method; (D) a logger with a transport/stream/reporter hook → one line; (E) another language → handler/sink shape; (F) anything → POST /ingest. Call through to the original, dev-gate the hook, never let delivery throw.
-4. Verify: emit one test log and read it back with \`read_logs\`.
+1. Call \`listen\` for the URL and the stream address. \`hint\` lists the ways to wire the app; \`hint interface=<name>\` gives one snippet.
+2. Find the app's logger (a shared logger module or class, or plain console.*) and what the dev command prints. If the code already logs what you need, capture those calls — wrapping the logger's methods (hint interface=logger-methods) captures them even when its level is off or flag-controlled — before adding any log calls of your own. If you must add some, tag them with a unique marker and remove every tagged line when done.
+3. Hook it with the least invasive interface that fits (piping stdout or injecting client.js from the DevTools console needs no source change). Call through to the original, dev-gate any source change, never let delivery throw.
+4. Verify with one test log and read_logs.
 
-Reading: take the cursor from \`read_logs\`, ask the user to reproduce, then \`await_logs\` with \`after=<cursor>\` and a tight filter (level_min, source, include, exclude — e.g. exclude="hmr|vite|GET /health"). Prefer \`after\` cursors over \`clear_logs\` when other agents may share the buffer.`;
+Reading — pick by how long you are waiting:
+- read_logs: what is there now. Pass the last cursor as \`after\`; filter tightly (level_min, source, include, exclude).
+- await_logs: one thing you expect soon. \`until=<regex>\` returns everything through a terminal line in one call.
+- Monitor on the ws stream URL from \`listen\` (or \`tiny-log-mcp tail\` in a shell) when the user is going to test by hand for a while: each matching entry is pushed to you as it happens while you keep working. Tell the user what to try, then leave them room to explore. Filter to the lines you would act on and include the failure signatures, not just the happy path.
+Prefer \`after\` cursors over clear_logs when other agents share the buffer.`;
 
 const FILTER_PROPERTIES = {
   after: {
@@ -90,9 +106,9 @@ export function createTools({ store, defaults = {} }) {
     {
       name: "listen",
       description:
-        "Start (or report) the local log listener and get the URL plus copy-paste snippets for " +
-        "wiring a browser, a Node logger, or any process's stdout to it. Call this first. " +
-        "Use host 0.0.0.0 to accept logs from a phone or another machine on the LAN.",
+        "Start (or report) the local log listener: returns its URL, the current cursor, and the " +
+        "stream address to watch with Monitor. Call this first. Use host 0.0.0.0 to accept logs " +
+        "from a phone or another machine. For how to wire the app, call hint.",
       inputSchema: {
         type: "object",
         properties: {
@@ -109,9 +125,31 @@ export function createTools({ store, defaults = {} }) {
         },
         additionalProperties: false,
       },
-      async handler(args) {
-        const current = await ensureListener(args);
+      async handler({ port, host }) {
+        const current = await ensureListener({ port, host });
         return describeListener(current, store.cursor);
+      },
+    },
+    {
+      name: "hint",
+      description:
+        "How to wire the app's logs to the listener. Without arguments: the list of interfaces " +
+        "and how to choose. With interface=<name>: the copy-paste snippet for that one — stdout " +
+        "(pipe a process), browser (client.js), logger-methods (wrap a logger object/class), " +
+        "transport (pino/winston/…), other-language (Python/Go/…), http (raw POST), or all.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          interface: { type: "string", enum: [...GUIDES, "all"] },
+        },
+        additionalProperties: false,
+      },
+      async handler({ interface: name }) {
+        const current = await ensureListener();
+        if (name === "all")
+          return GUIDES.map((g) => wiringGuide(current.url, g).join("\n")).join("\n\n");
+        if (name) return wiringGuide(current.url, name).join("\n");
+        return wiringIndex().join("\n");
       },
     },
     {
@@ -127,20 +165,34 @@ export function createTools({ store, defaults = {} }) {
       async handler(args) {
         const filter = toFilter(args);
         const entries = store.query(filter);
-        return render(entries, store.cursor, args.max_chars, false);
+        return render({ entries, cursor: store.cursor, maxChars: args.max_chars });
       },
     },
     {
       name: "await_logs",
       description:
-        "Block until a log matching the filter arrives, then return it. Use after asking the " +
-        "user to reproduce something. Pass the cursor from the last read as `after` so only " +
-        "new entries count. Returns a timeout note if nothing matched in time.",
+        "Block until matching logs arrive, then return them. Use while the user reproduces " +
+        "something. Pass the last cursor as `after`. Give `until` a regex for the line that ends " +
+        "what you are waiting for and you get everything up to it in one call; `settle_ms` keeps " +
+        "collecting briefly after the first match so a burst comes back together. Waits up to " +
+        `${MAX_WAIT_MS / 60_000} minutes — use long waits when a human is driving.`,
       inputSchema: {
         type: "object",
         properties: {
           ...FILTER_PROPERTIES,
           ...OUTPUT_PROPERTIES,
+          until: {
+            type: "string",
+            description:
+              "Case-insensitive regex. Keep collecting until an entry matches it (or the timeout), " +
+              "then return everything collected.",
+          },
+          settle_ms: {
+            type: "integer",
+            minimum: 0,
+            maximum: MAX_SETTLE_MS,
+            description: `After the first match, keep collecting for this long. Default ${DEFAULT_SETTLE_MS}; ignored with until.`,
+          },
           timeout_ms: {
             type: "integer",
             minimum: 0,
@@ -152,9 +204,26 @@ export function createTools({ store, defaults = {} }) {
       },
       async handler(args) {
         const filter = toFilter(args);
+        const until = toUntil(args.until);
         const timeout = Math.min(args.timeout_ms ?? DEFAULT_TIMEOUT_MS, MAX_WAIT_MS);
-        const entries = await store.wait(filter, timeout);
-        return render(entries, store.cursor, args.max_chars, true);
+        const settle = Math.min(args.settle_ms ?? DEFAULT_SETTLE_MS, MAX_SETTLE_MS);
+
+        const ready = until
+          ? (/** @type {Entry[]} */ found) => found.some((entry) => until.test(entry.text))
+          : undefined;
+        let { entries, satisfied } = await store.waitFor(filter, timeout, ready);
+        if (satisfied && !until && settle > 0) {
+          await sleep(settle);
+          entries = store.query(filter);
+        }
+        return render({
+          entries,
+          cursor: store.cursor,
+          maxChars: args.max_chars,
+          waited: true,
+          satisfied,
+          until: args.until,
+        });
       },
     },
     {
@@ -246,24 +315,51 @@ function toFilter(args) {
   }
 }
 
+/** @param {unknown} value @returns {RegExp | null} */
+function toUntil(value) {
+  try {
+    return toRegExp(value, "until");
+  } catch (err) {
+    if (err instanceof FilterError) throw new Error(err.message);
+    throw err;
+  }
+}
+
+/** @param {number} ms */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
- * @param {import("./store.js").Entry[]} entries
- * @param {number} cursor
- * @param {number | undefined} maxChars
- * @param {boolean} waited
+ * @param {object} options
+ * @param {Entry[]} options.entries
+ * @param {number} options.cursor
+ * @param {number | undefined} [options.maxChars]
+ * @param {boolean} [options.waited]
+ * @param {boolean} [options.satisfied]
+ * @param {string} [options.until]
  */
-function render(entries, cursor, maxChars, waited) {
-  const header = formatHeader({
-    count: entries.length,
-    cursor,
-    timedOut: waited && entries.length === 0,
-  });
+function render({ entries, cursor, maxChars, waited = false, satisfied = true, until }) {
+  let header;
+  if (until) {
+    const noun = entries.length === 1 ? "entry" : "entries";
+    header = satisfied
+      ? `${entries.length} ${noun} through the until match, times UTC (cursor ${cursor}). Pass after=${cursor} to read only newer ones.`
+      : `Timed out before until=${JSON.stringify(until)} matched; ${entries.length} ${noun} collected so far (cursor ${cursor}).`;
+  } else {
+    header = formatHeader({ count: entries.length, cursor, timedOut: waited && !satisfied });
+  }
   if (entries.length === 0) return header;
   return `${header}\n${formatEntries(entries, { maxChars })}`;
 }
 
-/** @param {Listener} listener @param {number} cursor @returns {string} */
+/**
+ * @param {Listener} listener
+ * @param {number} cursor
+ * @returns {string}
+ */
 function describeListener({ url, host, port }, cursor) {
+  const ws = `${url.replace(/^http/, "ws")}/stream`;
   const lines = [
     `tiny-log-mcp is listening at ${url} (cursor ${cursor}; pass after=${cursor} to read only what arrives from now).`,
   ];
@@ -279,67 +375,112 @@ function describeListener({ url, host, port }, cursor) {
       'Bound to this machine only. Call listen with host="0.0.0.0" to accept logs from a phone or another machine.',
     );
   }
-  lines.push("", ...wiringGuide(url), "", `Web UI for the human: ${url}/`);
+  lines.push(
+    "",
+    "Wiring: call hint (or hint interface=<name>) for how to connect the app's logs.",
+    "Read now: read_logs.  Wait for one thing: await_logs (until=<regex> returns everything through a terminal line).",
+    "Watch while the user drives (minutes, hands-free): each matching entry is pushed to you as it happens —",
+    `  Monitor({ ws: { url: "${ws}?after=${cursor}&include=<regex>&exclude=<regex>&level_min=<level>&until=<regex>" }, description: "<what you are watching for>", persistent: true })`,
+    `  shell: tiny-log-mcp tail --url ${url} --include <regex> [--until <regex>]`,
+    "  Filter to the lines you'd act on, and include the failure signatures, not only the happy path. Drop params you don't need; until closes the stream so the watch ends by itself; stop early with TaskStop.",
+    `Web UI for the human: ${url}/`,
+  );
   return lines.join("\n");
 }
 
-/**
- * The integration procedure with one snippet per logger interface. Lives in
- * the listen output (paid once per session), not in the always-loaded
- * instructions.
- */
-/** @param {string} url @returns {string[]} */
-function wiringGuide(url) {
-  const ingest = `${url}/ingest`;
-  const post = `fetch("${ingest}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, entries }) }).catch(() => {})`;
+/** The short form: what exists, and how to ask for one snippet. */
+function wiringIndex() {
   return [
-    "How to hook the app up:",
-    "1. Find the logger: grep for a shared logger module or class (logger., createLogger, pino(, winston, bunyan, consola, tslog, log4js, loglevel, debug(), roarr) or plain console.*, and check what the dev command prints to stdout.",
-    "2. Pick the easiest matching interface below. Call through to the original, dev-gate the hook (NODE_ENV / import.meta.env.DEV), never let delivery throw.",
-    "3. Verify: emit one test log and read it back with read_logs.",
-    "",
-    "A. The process writes to stdout/stderr (any language) — no code change:",
-    `   <dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api --url ${url}`,
-    "   pino/bunyan/winston NDJSON keeps level, time and fields; plain text gets ANSI stripped and a level guessed; stack frames are merged.",
-    "",
-    "B. A browser page — one tag; hooks console.*, window.onerror and unhandledrejection, batches, no-ops when the listener is down:",
-    `   <script src="${url}/client.js" data-source="web"></script>`,
-    "",
-    "C. A logger object or class with level methods (custom Logger class, console, loglevel, React Native, Electron) — wrap each method; the server joins raw args:",
-    `   const send = (source, entries) => ${post};`,
-    "   const fmt = (a) => (a instanceof Error ? (a.stack ?? String(a)) : a);",
-    "   function tap(logger, source) {",
-    '     for (const level of ["trace", "debug", "log", "info", "warn", "error", "fatal"]) {',
-    "       const original = logger[level];",
-    '       if (typeof original !== "function") continue;',
-    "       logger[level] = function (...args) {",
-    "         send(source, [{ level, args: args.map(fmt) }]);",
-    "         return original.apply(this, args);",
-    "       };",
-    "     }",
-    "   }",
-    '   tap(console, "api");            // or tap(Logger.prototype, "api") for a class, tap(loglevel, "web")',
-    "",
-    "D. A logger with a transport / stream / reporter hook — one line; records are forwarded as-is (level + message + fields preserved):",
-    `   const send = (source, entries) => ${post};`,
-    '   pino:     pino({ level: "trace" }, { write: (line) => send("api", [JSON.parse(line)]) })',
-    '   winston:  logger.add(new winston.transports.Stream({ format: winston.format.json(), stream: { write: (line) => send("api", [JSON.parse(line)]) } }))',
-    '   bunyan:   streams: [{ level: "trace", type: "raw", stream: { write: (rec) => send("api", [rec]) } }]',
-    '   consola:  consola.addReporter({ log: (r) => send("api", [{ level: r.type, args: r.args }]) })',
-    '   tslog:    logger.attachTransport((o) => send("api", [{ level: o._meta.logLevelName, args: Object.keys(o).filter((k) => k !== "_meta").map((k) => o[k]) }]))',
-    '   log4js:   appender { type: { configure: () => (e) => send("api", [{ level: e.level.levelStr, args: e.data }]) } }',
-    '   debug:    debug.log = (...args) => send("api", [{ level: "debug", args }])',
-    '   roarr:    globalThis.ROARR.write = (line) => send("api", [JSON.parse(line)])',
-    "",
-    "E. Another language — prefer A (pipe stdout); otherwise implement the handler/sink shape and POST:",
-    "   Python:   class Tap(logging.Handler):",
-    '                 def emit(self, r): post({"source": "api", "entries": [{"level": r.levelname, "message": self.format(r)}]})   # urllib/requests, swallow errors',
-    "             logging.getLogger().addHandler(Tap())",
-    "   Go: slog.Handler or an io.Writer that POSTs lines.  .NET: Serilog sink / ILogger provider.  Java: logback appender.  Ruby: Logger logdev.  Rust: tracing Layer.",
-    "",
-    "F. Anything that can make an HTTP request:",
-    `   POST ${ingest}  {"source":"api","entries":[{"level":"error","message":"…","ts":"2026-01-01T00:00:00Z","meta":{"reqId":"r1"}}]}`,
-    `   curl -d "plain text" "${ingest}?source=api&level=warn"`,
-    "   Accepted: a batch, a bare array, one object, or plain text. Each entry: level (any logger's names or numbers are normalized), message | msg | text | args[], ts | time, meta, source.",
+    "Find the app's logger, then pick the least invasive interface and call hint interface=<name> for its snippet:",
+    "  stdout          the process prints to stdout/stderr → pipe the dev command (no code change)",
+    "  browser         a web page → inject client.js from the DevTools console or a browser tool (no code change), or one tag",
+    "  logger-methods  a logger object/class with level methods → wrap them (captures calls even when the logger's level is off or flag-controlled)",
+    "  transport       a logger with a transport/stream/reporter hook (pino, winston, bunyan, consola, …) → one line",
+    "  other-language  Python, Go, .NET, Java, Ruby, Rust → handler/sink shape, or use stdout",
+    "  http            anything else → POST /ingest",
+    "Before adding log calls of your own, check whether the code already logs what you need: logger-methods captures those calls even when the logger's level would drop them. If you must add some, tag them with a unique marker (e.g. [TL-123]), filter with include, and remove every tagged line when done.",
+    "Rules: call through to the original, dev-gate any source change, never let delivery throw. Verify with one test log, then start watching.",
   ];
+}
+
+/**
+ * One interface's snippet, with the real URL filled in.
+ * @param {string} url
+ * @param {string} name
+ * @returns {string[]}
+ */
+function wiringGuide(url, name) {
+  const ingest = `${url}/ingest`;
+  const send = `const send = (source, entries) => fetch("${ingest}", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source, entries }) }).catch(() => {});`;
+  const inject = `(s => { s.src = "${url}/client.js"; s.dataset.source = "web"; document.head.append(s); })(document.createElement("script"))`;
+  switch (name) {
+    case "stdout":
+      return [
+        "stdout — the process prints to stdout/stderr (any language). No code change:",
+        `  <dev command> 2>&1 | npx -y tiny-log-mcp pipe --source api --url ${url}`,
+        "  pino/bunyan/winston NDJSON keeps level, time and fields; plain text gets ANSI stripped and a level guessed; stack frames are merged.",
+      ];
+    case "browser":
+      return [
+        `browser — load ${url}/client.js in the page. It hooks console.*, window.onerror and unhandledrejection, batches, and no-ops when the listener is down.`,
+        "  The page keeps its own origin: the client POSTs cross-origin to the listener. Never proxy or re-host the page for this.",
+        "  No code change (lost on reload — re-run after each load). Paste into the DevTools console, or run it with a browser-automation tool if you have one:",
+        `    ${inject}`,
+        `  Bookmarklet for the user:  javascript:${inject}`,
+        "  In source (survives reloads; dev-gate it, remove when done). Put one tag where the app's HTML lives:",
+        `    <script src="${url}/client.js" data-source="web"></script>`,
+        '    Vite: index.html at the project root · Next.js: app/layout.tsx via <Script strategy="beforeInteractive"> or pages/_document · CRA/webpack: public/index.html',
+        "  If the template is not in the repo (copied from a package, generated by a plugin), do not hunt for it — inject from the entry module instead:",
+        `    if (process.env.NODE_ENV !== "production") { ${inject}; }`,
+      ];
+    case "logger-methods":
+      return [
+        "logger-methods — a logger object or class with level methods (custom Logger class, console, loglevel, React Native, Electron). Wrap each method; the server joins raw args.",
+        "  This captures every call the app makes, including ones the logger would drop because its level is off or set by config/feature flags you cannot change: the wrapper runs before the logger's own level check. Prefer it over adding console.log calls when the code already logs what you need.",
+        `  ${send}`,
+        "  const fmt = (a) => (a instanceof Error ? (a.stack ?? String(a)) : a);",
+        "  function tap(logger, source) {",
+        '    for (const level of ["trace", "debug", "log", "info", "warn", "error", "fatal"]) {',
+        "      const original = logger[level];",
+        '      if (typeof original !== "function") continue;',
+        "      logger[level] = function (...args) {",
+        "        send(source, [{ level, args: args.map(fmt) }]);",
+        "        return original.apply(this, args);",
+        "      };",
+        "    }",
+        "  }",
+        '  tap(console, "api");   // or tap(Logger.prototype, "web") for a class (once, before instances are created), tap(loglevel, "web")',
+      ];
+    case "transport":
+      return [
+        "transport — a logger with a transport / stream / reporter hook. One line; records are forwarded as-is (level + message + fields preserved):",
+        `  ${send}`,
+        '  pino:     pino({ level: "trace" }, { write: (line) => send("api", [JSON.parse(line)]) })',
+        '  winston:  logger.add(new winston.transports.Stream({ format: winston.format.json(), stream: { write: (line) => send("api", [JSON.parse(line)]) } }))',
+        '  bunyan:   streams: [{ level: "trace", type: "raw", stream: { write: (rec) => send("api", [rec]) } }]',
+        '  consola:  consola.addReporter({ log: (r) => send("api", [{ level: r.type, args: r.args }]) })',
+        '  tslog:    logger.attachTransport((o) => send("api", [{ level: o._meta.logLevelName, args: Object.keys(o).filter((k) => k !== "_meta").map((k) => o[k]) }]))',
+        '  log4js:   appender { type: { configure: () => (e) => send("api", [{ level: e.level.levelStr, args: e.data }]) } }',
+        '  debug:    debug.log = (...args) => send("api", [{ level: "debug", args }])',
+        '  roarr:    globalThis.ROARR.write = (line) => send("api", [JSON.parse(line)])',
+        "  If the logger's level is set by config or flags you cannot change, set it to trace for the hook or use logger-methods instead.",
+      ];
+    case "other-language":
+      return [
+        "other-language — prefer stdout (pipe the process); otherwise implement the one-method handler/sink shape and POST:",
+        "  Python:   class Tap(logging.Handler):",
+        `                def emit(self, r): post({"source": "api", "entries": [{"level": r.levelname, "message": self.format(r)}]})   # urllib/requests to ${ingest}, swallow errors`,
+        "            logging.getLogger().addHandler(Tap())",
+        "  Go: slog.Handler or an io.Writer that POSTs lines.  .NET: Serilog sink / ILoggerProvider.  Java: logback appender.  Ruby: Logger logdev.  Rust: tracing Layer.",
+      ];
+    case "http":
+      return [
+        "http — anything that can make an HTTP request:",
+        `  POST ${ingest}  {"source":"api","entries":[{"level":"error","message":"…","ts":"2026-01-01T00:00:00Z","meta":{"reqId":"r1"}}]}`,
+        `  curl -d "plain text" "${ingest}?source=api&level=warn"`,
+        "  Accepted: a batch, a bare array, one object, or plain text. Each entry: level (any logger's names or numbers are normalized), message | msg | text | args[], ts | time, meta, source.",
+      ];
+    default:
+      return [`Unknown guide "${name}". One of: ${GUIDES.join(", ")}, all.`];
+  }
 }

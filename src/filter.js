@@ -58,8 +58,12 @@ function emptyToNull(value) {
   return value === undefined || value === null || value === "" ? null : String(value);
 }
 
-/** @param {unknown} value @param {string} name @returns {RegExp | null} */
-function toRegExp(value, name) {
+/**
+ * Case-insensitive RegExp from user input, or null when empty.
+ * @param {unknown} value @param {string} name @returns {RegExp | null}
+ * @throws {FilterError}
+ */
+export function toRegExp(value, name) {
   const pattern = emptyToNull(value);
   if (pattern === null) return null;
   try {

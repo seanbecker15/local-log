@@ -12,11 +12,12 @@ Ephemeral local log collector + MCP server. Zero runtime dependencies, Node ≥ 
 
 ## Layout
 
-- `bin/tiny-log-mcp.js` — CLI: `mcp` (default), `serve`, `pipe`.
+- `bin/tiny-log-mcp.js` — CLI: `mcp` (default), `serve`, `pipe`, `tail`.
 - `src/store.js` — ring buffer, cursor, filtered query, long-poll `wait`, subscribers.
 - `src/filter.js` — the one filter vocabulary (`after`, `level_min`, `include`, `exclude`, `source`, `limit`) shared by HTTP and MCP.
-- `src/server.js` — `node:http` routes: `/ingest`, `/logs`, `/events` (SSE), `/health`, static UI + `/client.js`.
-- `src/mcp.js` — tool definitions and MCP handlers; `src/jsonrpc.js` — stdio JSON-RPC framing.
+- `src/server.js` — `node:http` routes: `/ingest`, `/logs`, `/events` (SSE), `/stream` (WebSocket, for Monitor/`tail`), `/health`, static UI + `/client.js`.
+- `src/ws.js` — minimal server-side WebSocket (handshake, text frames out, close/ping in); `src/tail.js` — `/stream` client for the CLI.
+- `src/mcp.js` — tools (`listen`, `hint`, `read_logs`, `await_logs`, `clear_logs`), the always-loaded `INSTRUCTIONS`, and the per-interface wiring guide; `src/jsonrpc.js` — stdio JSON-RPC framing.
 - `src/pipe.js` — stdin → `/ingest` (NDJSON-aware, ANSI-stripped, stack frames merged).
 - `public/` — web UI and the browser drop-in client. No build step.
 
@@ -26,5 +27,6 @@ Ephemeral local log collector + MCP server. Zero runtime dependencies, Node ≥ 
 - Types live in JSDoc (`Entry`, `Filter`, `Store`, `Listener`, …). Annotate new functions; `pnpm typecheck` must stay clean.
 - Filtering is read-time only. Never drop entries at ingest — several agents may read the same buffer with different filters.
 - Keep `seq` monotonic across `clear()`; keep the waiter snapshot-then-clear order in `store.add` (see the regression test).
-- Only `/ingest` is cross-origin. Reads stay same-origin so a web page cannot exfiltrate dev logs.
+- Only `/ingest` is cross-origin. Reads stay same-origin (`/stream` checks `Origin` on upgrade) so a web page cannot exfiltrate dev logs.
+- Prompt text (`INSTRUCTIONS`, tool descriptions, `hint`) is product surface: change it deliberately, from observed agent behaviour, and don't overfit it to one incident.
 - Every change to the tool surface needs a matching update in `test/mcp.test.js` and the README table.

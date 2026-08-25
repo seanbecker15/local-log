@@ -94,23 +94,25 @@ export function createStore({ capacity = DEFAULT_CAPACITY } = {}) {
   }
 
   /**
-   * Resolves with matches as soon as any exist, or with `[]` once `timeoutMs`
-   * elapses. Re-checks on every arrival because an arrival may not match.
+   * Resolves once `ready(matches)` holds, or with whatever matched once
+   * `timeoutMs` elapses. Re-checks on every arrival because an arrival may
+   * not match. The default readiness is "at least one match".
    * @param {import('./filter.js').Filter} filter
    * @param {number} timeoutMs
-   * @returns {Promise<Entry[]>}
+   * @param {(matches: Entry[]) => boolean} [ready]
+   * @returns {Promise<{entries: Entry[], satisfied: boolean}>}
    */
-  function wait(filter, timeoutMs) {
+  function waitFor(filter, timeoutMs, ready = (matches) => matches.length > 0) {
     return new Promise((resolve) => {
       const deadline = Date.now() + timeoutMs;
       const attempt = () => {
         const found = query(filter);
-        if (found.length > 0) return resolve(found);
+        if (ready(found)) return resolve({ entries: found, satisfied: true });
         const remaining = deadline - Date.now();
-        if (remaining <= 0) return resolve([]);
+        if (remaining <= 0) return resolve({ entries: found, satisfied: false });
         const timer = setTimeout(() => {
           waiters.delete(wake);
-          resolve([]);
+          resolve({ entries: query(filter), satisfied: false });
         }, remaining);
         const wake = () => {
           clearTimeout(timer);
@@ -120,6 +122,18 @@ export function createStore({ capacity = DEFAULT_CAPACITY } = {}) {
       };
       attempt();
     });
+  }
+
+  /**
+   * Resolves with matches as soon as any exist, or with `[]` once `timeoutMs`
+   * elapses.
+   * @param {import('./filter.js').Filter} filter
+   * @param {number} timeoutMs
+   * @returns {Promise<Entry[]>}
+   */
+  async function wait(filter, timeoutMs) {
+    const { entries: found, satisfied } = await waitFor(filter, timeoutMs);
+    return satisfied ? found : [];
   }
 
   /** Discards buffered entries. The cursor is preserved. */
@@ -140,6 +154,7 @@ export function createStore({ capacity = DEFAULT_CAPACITY } = {}) {
     add,
     query,
     wait,
+    waitFor,
     clear,
     subscribe,
     get cursor() {

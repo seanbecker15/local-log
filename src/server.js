@@ -2,16 +2,18 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import { networkInterfaces } from "node:os";
 import pkg from "../package.json" with { type: "json" };
-import { FilterError, MAX_LIMIT, parseFilter } from "./filter.js";
+import { FilterError, MAX_LIMIT, matches, parseFilter, toRegExp } from "./filter.js";
+import { DEFAULT_MAX_CHARS, formatEntries } from "./format.js";
 import { safeStringify } from "./store.js";
 import { errorMessage } from "./util.js";
+import { acceptWebSocket } from "./ws.js";
 
 /** @typedef {import("./store.js").Store} Store */
 /** @typedef {{server: http.Server, host: string, port: number, url: string, close: () => Promise<void>}} Listener */
 
 export const DEFAULT_PORT = 7710;
 export const DEFAULT_HOST = "127.0.0.1";
-export const MAX_WAIT_MS = 60_000;
+export const MAX_WAIT_MS = 600_000;
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const SSE_REPLAY = MAX_LIMIT;
 const PUBLIC_DIR = new URL("../public/", import.meta.url);
@@ -30,6 +32,8 @@ const STATIC = {
  *   GET    /logs     ?after&level_min&include&exclude&source&limit&wait     (same-origin only)
  *   DELETE /logs
  *   GET    /events   server-sent events feed for the web UI
+ *   GET    /stream   WebSocket: one text frame per matching entry as it arrives     (same-origin only)
+ *                    ?after&level_min&include&exclude&source&until&format=json&max_chars
  *   GET    /health
  *   GET    /         web UI;  GET /client.js  browser drop-in
  *
@@ -42,12 +46,14 @@ const STATIC = {
  * @returns {http.Server}
  */
 export function createServer(store, { maxWaitMs = MAX_WAIT_MS } = {}) {
-  return http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     handle(store, req, res, maxWaitMs).catch((err) => {
       if (!res.headersSent) sendJson(res, 500, { error: errorMessage(err) });
       else res.end();
     });
   });
+  server.on("upgrade", (req, socket, head) => stream(store, req, socket, head));
+  return server;
 }
 
 /**
@@ -259,6 +265,62 @@ function events(store, req, res) {
     clearInterval(heartbeat);
     unsubscribe();
   });
+}
+
+/**
+ * WebSocket event stream: every entry that passes the filter is sent as one
+ * text frame the moment it arrives. Starts from `after` when given, otherwise
+ * from now. `until=<regex>` closes the stream after the matching entry, so a
+ * watcher ends on its own. Built for Claude Code's Monitor tool and the
+ * `tail` command; same-origin only, like every other read.
+ *
+ * @param {Store} store
+ * @param {http.IncomingMessage} req
+ * @param {import("node:stream").Duplex} socket
+ * @param {Buffer} head
+ */
+function stream(store, req, socket, head) {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const refuse = (/** @type {string} */ status, /** @type {string} */ body = "") => {
+    socket.write(
+      `HTTP/1.1 ${status}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n${body}`,
+    );
+    socket.destroy();
+  };
+  if (url.pathname !== "/stream") return refuse("404 Not Found");
+  // Browsers send Origin on WebSocket upgrades; a page from anywhere else must
+  // not read the buffer. Non-browser clients (Monitor, tail, curl) send none.
+  const origin = req.headers.origin;
+  if (origin && origin !== `http://${req.headers.host}`) return refuse("403 Forbidden");
+
+  const params = Object.fromEntries(url.searchParams);
+  let filter;
+  let until;
+  try {
+    filter = parseFilter(params);
+    until = toRegExp(params.until, "until");
+  } catch (err) {
+    if (err instanceof FilterError) return refuse("400 Bad Request", err.message);
+    throw err;
+  }
+  const asJson = params.format === "json";
+  const maxChars =
+    params.max_chars === undefined ? DEFAULT_MAX_CHARS : Number(params.max_chars) || 0;
+  const after = params.after === undefined ? store.cursor : filter.after;
+
+  const ws = acceptWebSocket(req, socket, head);
+  if (!ws) return;
+  /** @param {import("./store.js").Entry} entry */
+  const emit = (entry) => {
+    if (ws.closed) return;
+    ws.send(asJson ? JSON.stringify(entry) : formatEntries([entry], { maxChars }));
+    if (until?.test(entry.text)) ws.close(1000, "until matched");
+  };
+  for (const entry of store.query({ ...filter, after, limit: MAX_LIMIT })) emit(entry);
+  const unsubscribe = store.subscribe((event, payload) => {
+    if (event === "entry" && payload.seq > after && matches(payload, filter)) emit(payload);
+  });
+  ws.onClose(unsubscribe);
 }
 
 /** @param {http.IncomingMessage} req @returns {Promise<string>} */

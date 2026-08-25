@@ -54,7 +54,7 @@ test("tools/list exposes the four tools with schemas", async () => {
   const { result } = await request("tools/list");
   assert.deepEqual(
     result.tools.map((t) => t.name),
-    ["listen", "read_logs", "await_logs", "clear_logs"],
+    ["listen", "hint", "read_logs", "await_logs", "clear_logs"],
   );
   for (const tool of result.tools) {
     assert.equal(tool.inputSchema.type, "object");
@@ -72,10 +72,30 @@ test("unknown methods and tools are reported as errors", async () => {
 test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear_logs", async () => {
   const listen = await callTool("listen");
   const url = listen.content[0].text.match(/listening at (http:\/\/[^\s]+)/)[1];
-  assert.match(listen.content[0].text, /client\.js/);
-  assert.match(listen.content[0].text, /pipe --source/);
-  assert.match(listen.content[0].text, /1\. Find the logger/);
-  assert.match(listen.content[0].text, /tap\(console/);
+  // listen is operational: URL, cursor, stream address; wiring lives in hint.
+  assert.match(
+    listen.content[0].text,
+    /Monitor\(\{ ws: \{ url: "ws:\/\/127\.0\.0\.1:\d+\/stream\?after=0/,
+  );
+  assert.match(listen.content[0].text, /tiny-log-mcp tail --url/);
+  assert.doesNotMatch(listen.content[0].text, /tap\(console/);
+  assert.ok(listen.content[0].text.split("\n").length < 14);
+
+  const index = await callTool("hint");
+  assert.match(index.content[0].text, /logger-methods/);
+  assert.match(index.content[0].text, /level would drop/);
+  assert.doesNotMatch(index.content[0].text, /tap\(console/);
+  const browser = await callTool("hint", { interface: "browser" });
+  assert.match(browser.content[0].text, /client\.js/);
+  assert.match(browser.content[0].text, /DevTools console/);
+  assert.doesNotMatch(browser.content[0].text, /pino:/);
+  const methods = await callTool("hint", { interface: "logger-methods" });
+  assert.match(methods.content[0].text, /tap\(console/);
+  assert.match(methods.content[0].text, /level is off/);
+  const everything = await callTool("hint", { interface: "all" });
+  assert.match(everything.content[0].text, /pipe --source/);
+  assert.match(everything.content[0].text, /roarr/);
+  assert.match(everything.content[0].text, /logging\.Handler/);
 
   const health = await fetch(`${url}/health`).then((r) => r.json());
   assert.equal(health.ok, true);
@@ -115,6 +135,55 @@ test("end to end: listen → ingest over HTTP → read_logs / await_logs / clear
   const timedOut = await callTool("await_logs", { after: 999, timeout_ms: 20 });
   assert.match(timedOut.content[0].text, /timeout/);
 
+  // until: one call returns everything through the terminal line.
+  const untilCall = callTool("await_logs", {
+    include: "TL-1",
+    until: "result=true",
+    timeout_ms: 5000,
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  await fetch(`${url}/ingest`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      source: "web",
+      entries: [
+        { message: "[TL-1] step 1" },
+        { message: "noise" },
+        { message: "[TL-1] step 2" },
+        { message: "[TL-1] result=true" },
+      ],
+    }),
+  });
+  const untilResult = await untilCall;
+  assert.match(untilResult.content[0].text, /^3 entries through the until match/);
+  assert.match(untilResult.content[0].text, /step 1[\s\S]*step 2[\s\S]*result=true/);
+  assert.doesNotMatch(untilResult.content[0].text, /noise/);
+
+  const untilTimeout = await callTool("await_logs", {
+    include: "TL-1",
+    until: "never",
+    timeout_ms: 30,
+  });
+  assert.match(untilTimeout.content[0].text, /Timed out before until="never" matched; 3 entries/);
+
+  // settle_ms: a burst after the first match comes back in one call.
+  const settled = callTool("await_logs", { include: "burst", settle_ms: 300, timeout_ms: 5000 });
+  await new Promise((r) => setTimeout(r, 50));
+  await fetch(`${url}/ingest`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ entries: [{ message: "burst 1" }] }),
+  });
+  await new Promise((r) => setTimeout(r, 100));
+  await fetch(`${url}/ingest`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ entries: [{ message: "burst 2" }] }),
+  });
+  const settledResult = await settled;
+  assert.match(settledResult.content[0].text, /^2 entries/);
+
   const cleared = await callTool("clear_logs");
-  assert.match(cleared.content[0].text, /Cleared 2 entries/);
+  assert.match(cleared.content[0].text, /Cleared 8 entries/);
 });
