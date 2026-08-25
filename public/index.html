@@ -1,41 +1,27 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
-    <title>Local logger</title>
-    <link rel="stylesheet" href="/public/index.css" />
-    <link
-      rel="stylesheet"
-      href="https://assets.ubuntu.com/v1/vanilla-framework-version-4.1.0.min.css"
-    />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Ubuntu&display=swap"
-      rel="stylesheet"
-    />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tiny-log-mcp</title>
+    <link rel="stylesheet" href="/index.css" />
   </head>
   <body>
-    <div class="page-wrapper">
-      <div class="page-body">
-        <ul id="message-list" class="p-list--divided"></ul>
-      </div>
-      <div class="page-footer">
-        <form id="form" class="p-form p-form--inline">
-          <div class="p-form__group">
-            <div class="p-form__control">
-              <input
-                type="text"
-                name="message"
-                placeholder="Enter a message"
-                class="p-form__control"
-              />
-            </div>
-          </div>
-          <button type="submit" class="p-button">Send message</button>
-        </form>
-      </div>
-    </div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="/public/index.js"></script>
+    <header>
+      <strong>tiny-log-mcp</strong>
+      <input id="filter" type="search" placeholder="filter (regex)" autocomplete="off" />
+      <select id="level" title="minimum level">
+        <option value="trace">trace+</option>
+        <option value="debug">debug+</option>
+        <option value="info">info+</option>
+        <option value="warn">warn+</option>
+        <option value="error">error+</option>
+      </select>
+      <label><input id="follow" type="checkbox" checked /> follow</label>
+      <button id="clear" type="button">clear</button>
+      <span id="status" aria-live="polite"></span>
+    </header>
+    <ol id="log"></ol>
+    <script src="/index.js"></script>
   </body>
 </html>

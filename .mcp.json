@@ -1,11 +1,8 @@
 {
   "mcpServers": {
-    "local-log": {
+    "tiny-log": {
       "command": "node",
-      "args": ["mcp.js"],
-      "env": {
-        "LOCAL_LOG_URL": "http://localhost:3000"
-      }
+      "args": ["bin/tiny-log-mcp.js"]
     }
   }
 }

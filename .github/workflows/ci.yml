@@ -2,46 +2,29 @@ name: CI
 
 on:
   pull_request:
-    branches: ["**"]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  check:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [20.x]
-
+        node: ["22", "24", "26"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
         with:
-          node-version: ${{ matrix.node-version }}
-          cache: "npm"
+          # Test on every supported Node line; pnpm comes from mise.toml.
+          tool_versions: |
+            node ${{ matrix.node }}
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run linter
-        run: npm run lint
-
-      - name: Check code formatting
-        run: npm run format:check
-
-      - name: Verify app starts
-        run: |
-          npm start &
-          APP_PID=$!
-          sleep 5
-          if ps -p $APP_PID > /dev/null; then
-            echo "✓ App started successfully"
-            kill $APP_PID
-          else
-            echo "✗ App failed to start"
-            exit 1
-          fi
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test

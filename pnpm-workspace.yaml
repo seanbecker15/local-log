@@ -1,0 +1,9 @@
+# pnpm 11 reads settings from here (.npmrc is auth/registry only).
+
+# Never run lifecycle scripts — not ours, not dependencies'.
+ignoreScripts: true
+# No dependency may run a build step. Keep this empty.
+allowBuilds: {}
+# Refuse to resolve versions published less than a day ago.
+minimumReleaseAge: 1440
+engineStrict: true
