@@ -3,15 +3,22 @@ const socket = io();
 const form = document.getElementById("form");
 const messageList = document.getElementById("message-list");
 
-socket.on("message", function ({ message }) {
+socket.on("message", function ({ message, ts, level }) {
   if (typeof message !== "string") {
     return;
   }
 
+  // Prefer the server's ingest time. Rendering time drifts per client, so the
+  // same entry used to show a different timestamp in every open tab.
+  const stamp = ts || new Date().toISOString();
+
   message.split("\n").forEach((text) => {
     const messagesItem = document.createElement("li");
-    messagesItem.textContent = `[${new Date().toISOString()}] ${text}`;
+    messagesItem.textContent = `[${stamp}] ${text}`;
     messagesItem.className = "p-list__item";
+    if (level && level !== "log") {
+      messagesItem.dataset.level = level;
+    }
     messageList.appendChild(messagesItem);
   });
 

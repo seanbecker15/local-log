@@ -55,3 +55,11 @@ body {
   line-height: 3rem;
   padding-left: 2rem;
 }
+
+.p-list__item[data-level="warn"] {
+  box-shadow: inset 0.25rem 0 0 #f99b11;
+}
+
+.p-list__item[data-level="error"] {
+  box-shadow: inset 0.25rem 0 0 #c7162b;
+}

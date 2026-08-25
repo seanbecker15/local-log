@@ -7,6 +7,7 @@
     "dev": "nodemon app.js",
     "swagger": "nodemon swagger.js",
     "start": "node app.js",
+    "mcp": "node mcp.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint .",
     "format:check": "prettier --check ."
@@ -14,10 +15,12 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "body-parser": "^2.2.1",
     "cors": "^2.8.5",
     "express": "^5.2.1",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "eslint": "^9.39.1",
